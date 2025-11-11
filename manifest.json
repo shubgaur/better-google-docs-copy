@@ -1,0 +1,71 @@
+{
+  "manifest_version": 3,
+  "name": "Google Docs Copy for LLMs",
+  "version": "1.0.0",
+  "description": "Copy Google Docs content as markdown with images and comments for easy pasting into LLMs",
+
+  "permissions": [
+    "identity",
+    "storage",
+    "clipboardWrite",
+    "notifications",
+    "downloads"
+  ],
+
+  "host_permissions": [
+    "https://docs.google.com/*",
+    "https://www.googleapis.com/*",
+    "https://*.googleusercontent.com/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://docs.google.com/document/*"],
+      "js": ["content.js"],
+      "css": ["ui/button-styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "commands": {
+    "copy-doc": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+M",
+        "mac": "Command+Shift+M"
+      },
+      "description": "Quick copy document as markdown"
+    }
+  },
+
+  "options_page": "settings/settings.html",
+
+  "oauth2": {
+    "client_id": "1088951511892-bkeuqah00omj2us3j8khh46r78j219t3.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/documents.readonly",
+      "https://www.googleapis.com/auth/drive.readonly"
+    ]
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/menu/copy_icon.png",
+        "icons/menu/text_icon.png",
+        "icons/menu/comment_icon.png",
+        "icons/menu/image_icon.png"
+      ],
+      "matches": ["https://docs.google.com/*"]
+    }
+  ]
+}
