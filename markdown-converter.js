@@ -612,16 +612,17 @@ function formatCommentsWithQuotedContext(comments) {
         quotedText = quotedText.substring(0, maxQuoteLength) + '...';
       }
 
-      commentParts.push(`> ${quotedText}\n`);
+      // Escape XML special characters since this is wrapped in <comments> tags
+      commentParts.push(`> ${escapeXml(quotedText)}\n`);
     }
 
-    // Main comment with author
-    commentParts.push(`${comment.author}: "${comment.content}"\n`);
+    // Main comment with author (escape XML to prevent injection)
+    commentParts.push(`${escapeXml(comment.author)}: "${escapeXml(comment.content)}"\n`);
 
     // Replies
     if (comment.replies && comment.replies.length > 0) {
       for (const reply of comment.replies) {
-        commentParts.push(`  ${reply.author}: "${reply.content}"\n`);
+        commentParts.push(`  ${escapeXml(reply.author)}: "${escapeXml(reply.content)}"\n`);
       }
     }
 
