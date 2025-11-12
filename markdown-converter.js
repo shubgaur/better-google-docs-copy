@@ -406,7 +406,7 @@ function insertInlineComments(text, commentsMap, options, insertedCommentIds = n
       const match = text.match(quotedTextRegex);
 
       if (match) {
-        // Found exact position - insert inline comment here
+        // Found exact position - insert inline comment at end of line
         console.log(`Inserting comment inline after "${match[0].substring(0, 30)}..." at position ${match.index}`);
 
         // Format all comments for this quoted text
@@ -440,7 +440,20 @@ function insertInlineComments(text, commentsMap, options, insertedCommentIds = n
           }
         }
 
-        const insertPosition = match.index + match[0].length;
+        // Find the end of the current line instead of inserting right after the match
+        // This prevents splitting words when comments are made on partial text selections
+        const matchEnd = match.index + match[0].length;
+        let insertPosition = matchEnd;
+
+        // Find the next newline or end of string
+        const nextNewline = text.indexOf('\n', matchEnd);
+        if (nextNewline !== -1) {
+          insertPosition = nextNewline;
+        } else {
+          // No newline found, insert at end of text
+          insertPosition = text.length;
+        }
+
         text = text.slice(0, insertPosition) + commentMarker + text.slice(insertPosition);
       } else {
         // Could not find exact position - don't insert inline, let it appear in end section
