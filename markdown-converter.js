@@ -1,14 +1,39 @@
 // Markdown Converter - Converts Google Docs API response to Markdown
 
+// ============================================================================
+// CONSTANTS & OPTIMIZATIONS
+// ============================================================================
+
+// Pre-compiled Set for O(1) monospace font lookup
+const MONOSPACE_FONTS = new Set([
+  'Consolas',
+  'Courier New',
+  'Courier',
+  'Monaco',
+  'Menlo',
+  'Source Code Pro',
+  'Roboto Mono',
+  'Ubuntu Mono',
+  'Fira Mono',
+  'Fira Code',
+  'Inconsolata',
+  'SF Mono',
+  'Lucida Console'
+]);
+
+// Pre-compiled regex patterns for performance
+const URL_VALIDATION_REGEX = /^(https?:\/\/|mailto:|tel:)/i;
+
 /**
  * Extract plain text from document (no formatting)
+ * Optimized with array join instead of string concatenation
  */
 function extractPlainText(doc) {
-  let plainText = '';
+  const parts = [];
 
   // Add document title if available
   if (doc.title && doc.title.trim()) {
-    plainText += `${doc.title}\n\n`;
+    parts.push(doc.title, '\n\n');
   }
 
   // Process document body
@@ -17,14 +42,14 @@ function extractPlainText(doc) {
       if (element.paragraph && element.paragraph.elements) {
         for (const elem of element.paragraph.elements) {
           if (elem.textRun && elem.textRun.content) {
-            plainText += elem.textRun.content;
+            parts.push(elem.textRun.content);
           }
         }
       }
     }
   }
 
-  return plainText;
+  return parts.join('');
 }
 
 /**
@@ -108,23 +133,24 @@ function convertToMarkdown(doc, images, comments, options) {
 
 /**
  * Process document content recursively
+ * Optimized with array join for better performance
  */
 function processContent(content, imagesMap, doc, options, footnotesMap) {
-  let markdown = '';
+  const parts = [];
 
   for (const element of content) {
     if (element.paragraph) {
-      markdown += processParagraph(element.paragraph, imagesMap, doc, options, footnotesMap);
+      parts.push(processParagraph(element.paragraph, imagesMap, doc, options, footnotesMap));
     } else if (element.table) {
-      markdown += processTable(element.table, imagesMap, doc, options, footnotesMap);
+      parts.push(processTable(element.table, imagesMap, doc, options, footnotesMap));
     } else if (element.tableOfContents) {
-      markdown += '> *Table of Contents*\n\n';
+      parts.push('> *Table of Contents*\n\n');
     } else if (element.sectionBreak) {
-      markdown += '\n---\n\n';
+      parts.push('\n---\n\n');
     }
   }
 
-  return markdown;
+  return parts.join('');
 }
 
 /**
@@ -262,11 +288,11 @@ function processTextRun(textRun) {
     text = `<u>${text}</u>`;
   }
 
-  // Handle links
+  // Handle links (using pre-compiled regex for performance)
   if (style.link && style.link.url) {
     // Validate URL to prevent malformed or malicious links
     const url = style.link.url;
-    const isValidUrl = /^(https?:\/\/|mailto:|tel:)/i.test(url);
+    const isValidUrl = URL_VALIDATION_REGEX.test(url);
 
     if (isValidUrl) {
       // Don't wrap if the text is already the URL
@@ -279,25 +305,9 @@ function processTextRun(textRun) {
     // If invalid URL, just keep the text without making it a link
   }
 
-  // Handle code - check for common monospace fonts
-  const monospaceFonts = [
-    'Consolas',
-    'Courier New',
-    'Courier',
-    'Monaco',
-    'Menlo',
-    'Source Code Pro',
-    'Roboto Mono',
-    'Ubuntu Mono',
-    'Fira Mono',
-    'Fira Code',
-    'Inconsolata',
-    'SF Mono',
-    'Lucida Console'
-  ];
-
+  // Handle code - check for common monospace fonts (using pre-compiled Set for O(1) lookup)
   const fontFamily = style.weightedFontFamily?.fontFamily;
-  if (fontFamily && monospaceFonts.includes(fontFamily)) {
+  if (fontFamily && MONOSPACE_FONTS.has(fontFamily)) {
     text = `\`${text}\``;
   }
 
@@ -346,72 +356,78 @@ function processTable(table, imagesMap, doc, options, footnotesMap) {
 
 /**
  * Format comments section with XML structure for LLM readability
+ * Optimized with array join for better performance
  */
 function formatComments(comments) {
-  let markdown = '';
+  const parts = [];
 
   for (const comment of comments) {
     const status = comment.resolved ? 'resolved' : 'open';
-
-    markdown += `  <comment status="${status}">\n`;
+    const commentParts = [`  <comment status="${status}">\n`];
 
     // Show quoted text if available
     if (comment.quotedText) {
-      markdown += `    <quoted_text>${escapeXml(comment.quotedText)}</quoted_text>\n`;
+      commentParts.push(`    <quoted_text>${escapeXml(comment.quotedText)}</quoted_text>\n`);
     }
 
     // Main comment
-    markdown += `    <author>${escapeXml(comment.author)}</author>\n`;
-    markdown += `    <content>${escapeXml(comment.content)}</content>\n`;
+    commentParts.push(
+      `    <author>${escapeXml(comment.author)}</author>\n`,
+      `    <content>${escapeXml(comment.content)}</content>\n`
+    );
 
     // Replies
     if (comment.replies && comment.replies.length > 0) {
-      markdown += `    <replies>\n`;
+      commentParts.push(`    <replies>\n`);
       for (const reply of comment.replies) {
-        markdown += `      <reply>\n`;
-        markdown += `        <author>${escapeXml(reply.author)}</author>\n`;
-        markdown += `        <content>${escapeXml(reply.content)}</content>\n`;
-        markdown += `      </reply>\n`;
+        commentParts.push(
+          `      <reply>\n`,
+          `        <author>${escapeXml(reply.author)}</author>\n`,
+          `        <content>${escapeXml(reply.content)}</content>\n`,
+          `      </reply>\n`
+        );
       }
-      markdown += `    </replies>\n`;
+      commentParts.push(`    </replies>\n`);
     }
 
-    markdown += `  </comment>\n\n`;
+    commentParts.push(`  </comment>\n\n`);
+    parts.push(commentParts.join(''));
   }
 
-  return markdown;
+  return parts.join('');
 }
 
 /**
  * Format comments as blockquotes (alternative to XML)
+ * Optimized with array join for better performance
  */
 function formatCommentsAsBlockquotes(comments) {
-  let markdown = '';
+  const parts = [];
 
   for (const comment of comments) {
     const status = comment.resolved ? '✓ Resolved' : '○ Open';
-
-    markdown += `**${status}**\n\n`;
+    const commentParts = [`**${status}**\n\n`];
 
     // Show quoted text if available (escape markdown to prevent formatting issues)
     if (comment.quotedText) {
-      markdown += `> Re: "${escapeMarkdown(comment.quotedText)}"\n\n`;
+      commentParts.push(`> Re: "${escapeMarkdown(comment.quotedText)}"\n\n`);
     }
 
     // Main comment (escape content to prevent markdown injection)
-    markdown += `**${escapeMarkdown(comment.author)}**: ${escapeMarkdown(comment.content)}\n\n`;
+    commentParts.push(`**${escapeMarkdown(comment.author)}**: ${escapeMarkdown(comment.content)}\n\n`);
 
     // Replies
     if (comment.replies && comment.replies.length > 0) {
       for (const reply of comment.replies) {
-        markdown += `  → **${escapeMarkdown(reply.author)}**: ${escapeMarkdown(reply.content)}\n\n`;
+        commentParts.push(`  → **${escapeMarkdown(reply.author)}**: ${escapeMarkdown(reply.content)}\n\n`);
       }
     }
 
-    markdown += '---\n\n';
+    commentParts.push('---\n\n');
+    parts.push(commentParts.join(''));
   }
 
-  return markdown;
+  return parts.join('');
 }
 
 /**

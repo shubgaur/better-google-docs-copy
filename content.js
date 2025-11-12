@@ -21,11 +21,18 @@ const NOTIFICATION_FADE_DURATION_MS = 300; // Animation duration for notificatio
 // Filename
 const MAX_FILENAME_LENGTH = 100; // Maximum length for downloaded filenames
 
+// Debouncing
+const BUTTON_CLICK_DEBOUNCE_MS = 300; // Prevent rapid button clicks
+
 // Wait for Google Docs toolbar to load
 let retryCount = 0;
 
 // Selection state (captured when button is clicked)
 let currentSelection = null;
+
+// Debouncing state
+let isProcessing = false;
+let lastClickTime = 0;
 
 function init() {
   const toolbar = findToolbar();
@@ -54,43 +61,61 @@ function findToolbar() {
 /**
  * Get current selection information
  * Supports multiple disconnected ranges (Ctrl+click)
+ * Enhanced with validation and error handling
  */
 function getSelectionInfo() {
-  const selection = window.getSelection();
+  try {
+    const selection = window.getSelection();
 
-  if (!selection || selection.rangeCount === 0) {
-    return null;
-  }
-
-  // Collect all selected text from all ranges
-  let combinedText = '';
-  const ranges = [];
-
-  for (let i = 0; i < selection.rangeCount; i++) {
-    const range = selection.getRangeAt(i);
-    const rangeText = range.toString();
-
-    if (rangeText.trim().length > 0) {
-      combinedText += (i > 0 ? '\n\n' : '') + rangeText;
-      ranges.push({
-        text: rangeText,
-        startContainer: range.startContainer,
-        startOffset: range.startOffset,
-        endContainer: range.endContainer,
-        endOffset: range.endOffset
-      });
+    if (!selection || selection.rangeCount === 0) {
+      return null;
     }
-  }
 
-  if (combinedText.trim().length === 0) {
+    // Collect all selected text from all ranges
+    let combinedText = '';
+    const ranges = [];
+
+    for (let i = 0; i < selection.rangeCount; i++) {
+      try {
+        const range = selection.getRangeAt(i);
+
+        // Validate range before processing
+        if (!range || !range.startContainer || !range.endContainer) {
+          continue;
+        }
+
+        const rangeText = range.toString();
+
+        if (rangeText && rangeText.trim().length > 0) {
+          combinedText += (i > 0 ? '\n\n' : '') + rangeText;
+          ranges.push({
+            text: rangeText,
+            startContainer: range.startContainer,
+            startOffset: range.startOffset,
+            endContainer: range.endContainer,
+            endOffset: range.endOffset
+          });
+        }
+      } catch (rangeError) {
+        console.warn('Failed to process range:', rangeError);
+        // Continue processing other ranges
+        continue;
+      }
+    }
+
+    if (combinedText.trim().length === 0) {
+      return null;
+    }
+
+    return {
+      text: combinedText,
+      ranges: ranges,
+      rangeCount: ranges.length
+    };
+  } catch (error) {
+    console.error('Failed to get selection info:', error);
     return null;
   }
-
-  return {
-    text: combinedText,
-    ranges: ranges,
-    rangeCount: ranges.length
-  };
 }
 
 
@@ -280,18 +305,32 @@ function injectCopyButton(toolbar) {
     dropdown.style.display = 'none';
   });
 
-  // Handle menu item clicks
+  // Handle menu item clicks with debouncing
   dropdown.querySelectorAll('.gdoc-copy-menu-item').forEach((item, index) => {
     item.addEventListener('click', async (e) => {
       e.stopPropagation();
+
+      // Debounce - prevent rapid clicks
+      const now = Date.now();
+      if (isProcessing || (now - lastClickTime) < BUTTON_CLICK_DEBOUNCE_MS) {
+        return;
+      }
+
+      lastClickTime = now;
+      isProcessing = true;
+
       const mode = item.getAttribute('data-mode');
       const action = menuItems[index].action;
       dropdown.style.display = 'none';
 
-      if (action === 'download') {
-        await downloadDocument(mode);
-      } else {
-        await copyDocument(mode);
+      try {
+        if (action === 'download') {
+          await downloadDocument(mode);
+        } else {
+          await copyDocument(mode);
+        }
+      } finally {
+        isProcessing = false;
       }
     });
   });
@@ -314,8 +353,15 @@ function getDocumentId() {
 
 /**
  * Process document (copy or download)
+ * Enhanced with validation and error handling
  */
 async function processDocument(mode, isDownload = false) {
+  // Validate inputs
+  if (!mode || typeof mode !== 'string') {
+    showNotification('Error: Invalid mode specified', 'error');
+    return;
+  }
+
   const documentId = getDocumentId();
 
   if (!documentId) {
@@ -323,12 +369,19 @@ async function processDocument(mode, isDownload = false) {
     return;
   }
 
-  // Show loading notification
+  // Show loading notification with progress
   const selectionType = currentSelection ? 'selected text' : 'document';
   const action = isDownload ? 'for download' : '';
-  showNotification(`Preparing ${selectionType} ${action}...`, 'loading');
+  showNotification(`Preparing ${selectionType} ${action}...`, 'loading', 'Initializing...');
 
   try {
+    // Validate selection if present
+    if (currentSelection) {
+      if (!currentSelection.text || typeof currentSelection.text !== 'string') {
+        currentSelection = null; // Invalid selection, clear it
+      }
+    }
+
     // Send message to background script to process the document
     const response = await chrome.runtime.sendMessage({
       action: 'copyDocument',
@@ -338,19 +391,31 @@ async function processDocument(mode, isDownload = false) {
       forceRefresh: true // Always get fresh data when user clicks button
     });
 
+    if (!response) {
+      throw new Error('No response from background script');
+    }
+
     if (response.success) {
-      const stats = response.stats;
+      const stats = response.stats || { characters: 0, images: 0, comments: 0 };
+
+      // Validate response data
+      if (!response.markdown || typeof response.markdown !== 'string') {
+        throw new Error('Invalid markdown data received');
+      }
+
       let message = '';
 
       if (isDownload) {
-        // Download flow
-        const docTitle = document.title.replace(' - Google Docs', '') || 'document';
-        const filename = `${docTitle
+        // Download flow - validate title
+        const docTitle = (document.title || '').replace(' - Google Docs', '').trim();
+        const sanitizedTitle = docTitle
           .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
           .replace(/\s+/g, ' ')
           .replace(/\.+$/g, '')
           .trim()
-          .substring(0, MAX_FILENAME_LENGTH) || 'document'}.md`;
+          .substring(0, MAX_FILENAME_LENGTH);
+
+        const filename = `${sanitizedTitle || 'document'}.md`;
 
         const blob = new Blob([response.markdown], { type: 'text/markdown' });
         const url = URL.createObjectURL(blob);
@@ -364,24 +429,30 @@ async function processDocument(mode, isDownload = false) {
 
         message = `✓ Downloaded ${filename}! ${stats.characters} chars, ${stats.images} images, ${stats.comments} comments`;
       } else {
-        // Copy flow
+        // Copy flow - validate clipboard API availability
+        if (!navigator.clipboard || !navigator.clipboard.writeText) {
+          throw new Error('Clipboard API not available');
+        }
+
         await navigator.clipboard.writeText(response.markdown);
         message = `✓ Copied! ${stats.characters} chars, ${stats.images} images, ${stats.comments} comments`;
       }
 
       // Add warnings if present
-      if (response.warnings && response.warnings.length > 0) {
+      if (response.warnings && Array.isArray(response.warnings) && response.warnings.length > 0) {
         message += ` (⚠ ${response.warnings.join(', ')})`;
       }
 
       showNotification(message, 'success');
     } else {
-      showNotification(`Error: ${response.error}`, 'error');
+      const errorMsg = response.error || 'Unknown error occurred';
+      showNotification(`Error: ${errorMsg}`, 'error');
     }
 
   } catch (error) {
     console.error(`${isDownload ? 'Download' : 'Copy'} failed:`, error);
-    showNotification(`Error: ${error.message}`, 'error');
+    const errorMsg = error.message || 'An unexpected error occurred';
+    showNotification(`Error: ${errorMsg}`, 'error');
   }
 }
 
@@ -400,9 +471,9 @@ async function downloadDocument(mode) {
 }
 
 /**
- * Show toast notification
+ * Show toast notification with circular progress loader
  */
-function showNotification(message, type = 'info') {
+function showNotification(message, type = 'info', subtext = '') {
   // Remove any existing notifications
   const existing = document.getElementById('gdoc-copy-notification');
   if (existing) {
@@ -413,7 +484,62 @@ function showNotification(message, type = 'info') {
   const notification = document.createElement('div');
   notification.id = 'gdoc-copy-notification';
   notification.className = `gdoc-copy-notification gdoc-copy-notification-${type}`;
-  notification.textContent = message;
+
+  // Create progress circle for loading state
+  if (type === 'loading') {
+    const progressContainer = document.createElement('div');
+    progressContainer.className = 'gdoc-copy-progress-circle';
+
+    // Create SVG circle
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'gdoc-copy-progress-svg');
+    svg.setAttribute('viewBox', '0 0 32 32');
+
+    const radius = 14;
+    const circumference = 2 * Math.PI * radius;
+
+    // Background circle
+    const bgCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    bgCircle.setAttribute('class', 'gdoc-copy-progress-bg');
+    bgCircle.setAttribute('cx', '16');
+    bgCircle.setAttribute('cy', '16');
+    bgCircle.setAttribute('r', radius);
+
+    // Progress circle
+    const progressCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    progressCircle.setAttribute('class', 'gdoc-copy-progress-bar');
+    progressCircle.setAttribute('cx', '16');
+    progressCircle.setAttribute('cy', '16');
+    progressCircle.setAttribute('r', radius);
+    progressCircle.setAttribute('stroke-dasharray', circumference);
+    progressCircle.setAttribute('stroke-dashoffset', circumference); // Start at 0%
+    progressCircle.id = 'gdoc-progress-bar';
+
+    svg.appendChild(bgCircle);
+    svg.appendChild(progressCircle);
+    progressContainer.appendChild(svg);
+
+    notification.appendChild(progressContainer);
+  }
+
+  // Create message container
+  const messageContainer = document.createElement('div');
+  messageContainer.className = 'gdoc-copy-notification-message';
+
+  const mainText = document.createElement('div');
+  mainText.className = 'gdoc-copy-notification-text';
+  mainText.textContent = message;
+  messageContainer.appendChild(mainText);
+
+  if (subtext) {
+    const subtextEl = document.createElement('div');
+    subtextEl.className = 'gdoc-copy-notification-subtext';
+    subtextEl.id = 'gdoc-notification-subtext';
+    subtextEl.textContent = subtext;
+    messageContainer.appendChild(subtextEl);
+  }
+
+  notification.appendChild(messageContainer);
 
   document.body.appendChild(notification);
 
@@ -423,6 +549,25 @@ function showNotification(message, type = 'info') {
       notification.classList.add('gdoc-copy-notification-fade');
       setTimeout(() => notification.remove(), NOTIFICATION_FADE_DURATION_MS);
     }, NOTIFICATION_DURATION_MS);
+  }
+}
+
+/**
+ * Update progress circle percentage (0-100)
+ */
+function updateProgress(percentage, subtext = '') {
+  const progressBar = document.getElementById('gdoc-progress-bar');
+  const subtextEl = document.getElementById('gdoc-notification-subtext');
+
+  if (progressBar) {
+    const radius = 14;
+    const circumference = 2 * Math.PI * radius;
+    const offset = circumference - (percentage / 100) * circumference;
+    progressBar.setAttribute('stroke-dashoffset', offset);
+  }
+
+  if (subtextEl && subtext) {
+    subtextEl.textContent = subtext;
   }
 }
 
@@ -443,7 +588,7 @@ if (document.readyState === 'loading') {
   init();
 }
 
-// Listen for keyboard shortcut trigger from background script
+// Listen for messages from background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'triggerCopyMenu') {
     // Find and click the main button to open the dropdown
@@ -451,5 +596,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (button) {
       button.click();
     }
+  } else if (request.action === 'updateProgress') {
+    // Update progress circle
+    updateProgress(request.percentage, request.message);
   }
 });

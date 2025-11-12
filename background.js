@@ -35,6 +35,25 @@ const IMAGE_FILENAME_MAX_LENGTH = 50; // Max length for sanitized title in filen
 const requestTimestamps = [];
 const pendingRequests = new Map();
 
+/**
+ * Send progress update to content script
+ */
+async function sendProgressUpdate(percentage, message) {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs[0] && tabs[0].url && tabs[0].url.includes('docs.google.com/document')) {
+      await chrome.tabs.sendMessage(tabs[0].id, {
+        action: 'updateProgress',
+        percentage: Math.min(100, Math.max(0, percentage)),
+        message: message
+      });
+    }
+  } catch (error) {
+    // Silently fail - progress updates are non-critical
+    console.debug('Failed to send progress update:', error);
+  }
+}
+
 // Message handler for content script requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'copyDocument') {
@@ -141,13 +160,17 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
       }
 
     // Step 2: Get OAuth token
+    await sendProgressUpdate(5, 'Authenticating...');
     const token = await getAuthToken();
+    await sendProgressUpdate(10, 'Authenticated');
 
     // Step 2: Get user settings
     const settings = await getUserSettings();
 
     // Step 3: Fetch document content from Docs API
+    await sendProgressUpdate(15, 'Fetching document...');
     let doc = await getDocumentContent(documentId, token);
+    await sendProgressUpdate(30, 'Document fetched');
 
     // Step 4: Determine what to fetch based on mode
     const options = {
@@ -164,10 +187,19 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
 
     // Step 4: Filter document by selection if provided
     if (selectionInfo && selectionInfo.text) {
+      await sendProgressUpdate(35, 'Filtering selection...');
       doc = filterDocumentBySelection(doc, selectionInfo);
+      await sendProgressUpdate(40, 'Selection filtered');
     }
 
     // Step 5 & 6: Fetch images and comments in parallel with graceful degradation
+    if (options.includeImages || options.includeComments) {
+      const tasks = [];
+      if (options.includeImages) tasks.push('images');
+      if (options.includeComments) tasks.push('comments');
+      await sendProgressUpdate(45, `Fetching ${tasks.join(' and ')}...`);
+    }
+
     const [imagesResult, commentsResult] = await Promise.allSettled([
       // Fetch images if requested
       options.includeImages
@@ -192,6 +224,8 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
         : Promise.resolve([])
     ]);
 
+    await sendProgressUpdate(70, 'Processing content...');
+
     // Extract results with graceful degradation
     const images = imagesResult.status === 'fulfilled' ? imagesResult.value : [];
     const comments = commentsResult.status === 'fulfilled' ? commentsResult.value : [];
@@ -214,7 +248,9 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
     }
 
     // Step 7: Convert to markdown (will be handled by markdown-converter.js)
+    await sendProgressUpdate(80, 'Converting to markdown...');
     const markdown = await convertToMarkdown(doc, images, comments, options);
+    await sendProgressUpdate(95, 'Finalizing...');
 
       return {
         success: true,
