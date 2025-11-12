@@ -95,9 +95,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
     return true;
   } else if (request.action === 'checkAuth') {
-    // Check if user is authenticated (non-interactive)
-    chrome.identity.getAuthToken({ interactive: false }, (token) => {
-      sendResponse({ authenticated: !!token });
+    // Check if user is authenticated (check storage for token)
+    chrome.storage.local.get(['authToken', 'tokenExpiry'], (result) => {
+      const isAuthenticated = !!(result.authToken && result.tokenExpiry && Date.now() < result.tokenExpiry);
+      sendResponse({ authenticated: isAuthenticated });
     });
     return true;
   }
@@ -309,24 +310,47 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
  * Token persists automatically - Chrome manages caching and refresh
  */
 async function getAuthToken(forceRefresh = false) {
-  return new Promise((resolve, reject) => {
-    // Add timeout for OAuth flow (only for interactive prompts)
-    let timeout;
-    if (forceRefresh) {
-      timeout = setTimeout(() => {
-        reject(new Error('Authentication timed out. Please try again or check your internet connection.'));
-      }, OAUTH_TIMEOUT_MS);
+  // First check if we have a cached token (unless forceRefresh)
+  if (!forceRefresh) {
+    try {
+      const result = await chrome.storage.local.get(['authToken', 'tokenExpiry']);
+      if (result.authToken && result.tokenExpiry && Date.now() < result.tokenExpiry) {
+        return result.authToken;
+      }
+    } catch (error) {
+      console.log('No cached token found, proceeding with OAuth flow');
     }
+  }
 
-    chrome.identity.getAuthToken(
-      { interactive: true },
-      (token) => {
-        if (timeout) clearTimeout(timeout);
+  // Get client ID and scopes from manifest
+  const manifest = chrome.runtime.getManifest();
+  const clientId = manifest.oauth2.client_id;
+  const scopes = manifest.oauth2.scopes.join(' ');
+  const redirectUri = chrome.identity.getRedirectURL();
+
+  // Build OAuth URL
+  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  authUrl.searchParams.set('client_id', clientId);
+  authUrl.searchParams.set('response_type', 'token');
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  authUrl.searchParams.set('scope', scopes);
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error('Authentication timed out. Please try again or check your internet connection.'));
+    }, OAUTH_TIMEOUT_MS);
+
+    chrome.identity.launchWebAuthFlow(
+      {
+        url: authUrl.toString(),
+        interactive: true
+      },
+      (responseUrl) => {
+        clearTimeout(timeout);
 
         if (chrome.runtime.lastError) {
           const errorMsg = chrome.runtime.lastError.message;
 
-          // Handle specific error cases with helpful messages
           if (errorMsg.includes('User did not approve') || errorMsg.includes('canceled')) {
             reject(new Error('Authentication was cancelled. Please try again and approve access to continue.'));
             return;
@@ -337,17 +361,34 @@ async function getAuthToken(forceRefresh = false) {
             return;
           }
 
-          // Generic authentication error with actionable advice
           reject(new Error(`Authentication failed: ${errorMsg}. Please go to Settings and click "Authenticate" to try again.`));
           return;
         }
 
-        if (!token) {
+        if (!responseUrl) {
           reject(new Error('No access token received. Please go to Settings and click "Authenticate" to authorize this extension.'));
           return;
         }
 
-        resolve(token);
+        // Extract access token from URL fragment
+        const url = new URL(responseUrl);
+        const params = new URLSearchParams(url.hash.substring(1)); // Remove '#' and parse
+        const accessToken = params.get('access_token');
+        const expiresIn = params.get('expires_in');
+
+        if (!accessToken) {
+          reject(new Error('Failed to extract access token from OAuth response.'));
+          return;
+        }
+
+        // Cache the token with expiry
+        const expiryTime = Date.now() + (parseInt(expiresIn || '3600') * 1000);
+        chrome.storage.local.set({
+          authToken: accessToken,
+          tokenExpiry: expiryTime
+        });
+
+        resolve(accessToken);
       }
     );
   });
@@ -357,20 +398,25 @@ async function getAuthToken(forceRefresh = false) {
  * Clear cached auth token (for manual re-authentication)
  */
 async function clearAuthToken() {
-  return new Promise((resolve) => {
-    chrome.identity.getAuthToken({ interactive: false }, (token) => {
-      if (token) {
-        chrome.identity.removeCachedAuthToken({ token }, () => {
-          // Also revoke the token with Google
-          fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`)
-            .catch(() => {}) // Ignore revocation errors
-            .finally(() => resolve());
-        });
-      } else {
-        resolve();
+  try {
+    // Get token from storage
+    const result = await chrome.storage.local.get(['authToken']);
+
+    if (result.authToken) {
+      // Revoke the token with Google
+      try {
+        await fetch(`https://accounts.google.com/o/oauth2/revoke?token=${result.authToken}`);
+      } catch (error) {
+        // Ignore revocation errors
+        console.log('Token revocation failed (may already be invalid):', error);
       }
-    });
-  });
+    }
+
+    // Clear token from storage
+    await chrome.storage.local.remove(['authToken', 'tokenExpiry']);
+  } catch (error) {
+    console.error('Error clearing auth token:', error);
+  }
 }
 
 /**
