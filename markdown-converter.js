@@ -97,7 +97,9 @@ function convertToMarkdown(doc, images, comments, options) {
           commentsMap.set(quotedText, []);
         }
         commentsMap.get(quotedText).push(comment);
-        console.log(`Added comment for quoted text: "${quotedText.substring(0, 50)}..."`);
+        console.log(`✓ Added comment to map - Author: "${comment.author}", Quoted: "${quotedText.substring(0, 50)}...", Content: "${comment.content.substring(0, 30)}..."`);
+      } else {
+        console.log(`✗ Comment has NO quoted text - Author: "${comment.author}", Content: "${comment.content.substring(0, 50)}..." - will only appear in end section`);
       }
     }
 
@@ -136,6 +138,8 @@ function convertToMarkdown(doc, images, comments, options) {
   }
 
   // Append remaining comments section (for comments that weren't inserted inline)
+  console.log(`🔍 End-of-document check: includeComments=${options.includeComments}, total comments=${comments.length}`);
+
   if (options.includeComments && comments.length > 0) {
     // Filter out resolved comments if setting is disabled
     let commentsToInclude = comments;
@@ -146,19 +150,28 @@ function convertToMarkdown(doc, images, comments, options) {
     // Only include comments that weren't inserted inline
     const generalComments = commentsToInclude.filter(c => !insertedCommentIds.has(c.id));
 
-    console.log(`${insertedCommentIds.size} comments inserted inline, ${generalComments.length} comments for end section`);
+    console.log(`📊 FINAL COMMENT SUMMARY: ${insertedCommentIds.size} comments inserted inline, ${generalComments.length} comments for end section`);
 
     if (generalComments.length > 0) {
       const commentFormat = options.commentFormat || 'xml';
+      console.log(`📝 Adding ${generalComments.length} comments to end section using format: ${commentFormat}`);
+
+      for (const comment of generalComments) {
+        console.log(`  - "${comment.author}": "${comment.content.substring(0, 40)}..."`);
+      }
 
       if (commentFormat === 'xml') {
+        console.log('Adding <comments> XML section to output');
         markdown += '\n<comments>\n';
         markdown += formatComments(generalComments);
         markdown += '</comments>\n';
       } else if (commentFormat === 'blockquote') {
+        console.log('Adding ## Comments blockquote section to output');
         markdown += '\n## Comments\n\n';
         markdown += formatCommentsAsBlockquotes(generalComments);
       }
+    } else {
+      console.log('⚠️ No comments to add to end section (all were inserted inline or filtered out)');
     }
   }
 
