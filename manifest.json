@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Google Docs Copy for LLMs",
-  "version": "1.0.0",
+  "name": "Better Google Docs Copy",
+  "version": "1.0",
   "description": "Copy Google Docs content as markdown with images and comments for easy pasting into LLMs",
-  "author": "Shubham Gaur",
+  "author": "Shub Gaur",
   "homepage_url": "https://github.com/shubgaur/better-google-docs-copy",
 
   "permissions": [
