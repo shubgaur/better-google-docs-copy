@@ -3,6 +3,8 @@
   "name": "Google Docs Copy for LLMs",
   "version": "1.0.0",
   "description": "Copy Google Docs content as markdown with images and comments for easy pasting into LLMs",
+  "author": "Shubham Gaur",
+  "homepage_url": "https://github.com/shubgaur/better-google-docs-copy",
 
   "permissions": [
     "identity",

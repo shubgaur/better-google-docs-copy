@@ -53,7 +53,7 @@ async function sendProgressUpdate(percentage, message) {
   }
 }
 
-// Message handler for content script requests
+// Message handler for content script and settings page requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'copyDocument') {
     // Handle async operation without blocking message channel
@@ -74,6 +74,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       });
     return true; // Keep message channel open for async response
+  } else if (request.action === 'authenticate') {
+    // Manual authentication from settings page
+    getAuthToken(true)
+      .then(token => {
+        sendResponse({ success: true, authenticated: true });
+      })
+      .catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  } else if (request.action === 'signOut') {
+    // Sign out - clear cached token
+    clearAuthToken()
+      .then(() => {
+        sendResponse({ success: true });
+      })
+      .catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  } else if (request.action === 'checkAuth') {
+    // Check if user is authenticated (non-interactive)
+    chrome.identity.getAuthToken({ interactive: false }, (token) => {
+      sendResponse({ authenticated: !!token });
+    });
+    return true;
   }
 });
 
@@ -280,45 +306,70 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
 /**
  * Get OAuth token using chrome.identity.getAuthToken (better UX)
  * Uses Chrome's built-in account picker with full-screen UI
+ * Token persists automatically - Chrome manages caching and refresh
  */
 async function getAuthToken(forceRefresh = false) {
   return new Promise((resolve, reject) => {
-    // Add timeout for OAuth flow
-    const timeout = setTimeout(() => {
-      reject(new Error('OAuth flow timed out. Please try again.'));
-    }, OAUTH_TIMEOUT_MS);
+    // Add timeout for OAuth flow (only for interactive prompts)
+    let timeout;
+    if (forceRefresh) {
+      timeout = setTimeout(() => {
+        reject(new Error('Authentication timed out. Please try again or check your internet connection.'));
+      }, OAUTH_TIMEOUT_MS);
+    }
 
     chrome.identity.getAuthToken(
-      {
-        interactive: true,
-        // Clear cache if forcing refresh
-        ...(forceRefresh && { scopes: chrome.runtime.getManifest().oauth2.scopes })
-      },
+      { interactive: true },
       (token) => {
-        clearTimeout(timeout);
+        if (timeout) clearTimeout(timeout);
 
         if (chrome.runtime.lastError) {
-          // If forcing refresh and got cached token error, remove cached token and retry
-          if (forceRefresh && chrome.runtime.lastError.message?.includes('cached')) {
-            chrome.identity.removeCachedAuthToken({ token: '' }, () => {
-              // Retry without forceRefresh to get new token
-              getAuthToken(false).then(resolve).catch(reject);
-            });
+          const errorMsg = chrome.runtime.lastError.message;
+
+          // Handle specific error cases with helpful messages
+          if (errorMsg.includes('User did not approve') || errorMsg.includes('canceled')) {
+            reject(new Error('Authentication was cancelled. Please try again and approve access to continue.'));
             return;
           }
 
-          reject(new Error(`OAuth failed: ${chrome.runtime.lastError.message}`));
+          if (errorMsg.includes('network') || errorMsg.includes('offline')) {
+            reject(new Error('Network error. Please check your internet connection and try again.'));
+            return;
+          }
+
+          // Generic authentication error with actionable advice
+          reject(new Error(`Authentication failed: ${errorMsg}. Please go to Settings and click "Authenticate" to try again.`));
           return;
         }
 
         if (!token) {
-          reject(new Error('No access token received. Did you cancel authorization?'));
+          reject(new Error('No access token received. Please go to Settings and click "Authenticate" to authorize this extension.'));
           return;
         }
 
         resolve(token);
       }
     );
+  });
+}
+
+/**
+ * Clear cached auth token (for manual re-authentication)
+ */
+async function clearAuthToken() {
+  return new Promise((resolve) => {
+    chrome.identity.getAuthToken({ interactive: false }, (token) => {
+      if (token) {
+        chrome.identity.removeCachedAuthToken({ token }, () => {
+          // Also revoke the token with Google
+          fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`)
+            .catch(() => {}) // Ignore revocation errors
+            .finally(() => resolve());
+        });
+      } else {
+        resolve();
+      }
+    });
   });
 }
 
