@@ -12,7 +12,6 @@ const MIN_CLIPBOARD_LENGTH = 20; // Minimum clipboard text length to consider as
 const FUZZY_MATCH_CHUNK_SIZE = 100; // Characters to use for fuzzy matching fallback
 
 // Authentication
-const TOKEN_EXPIRY_BUFFER = 5 * 60 * 1000; // 5 minutes buffer before token expiry
 const OAUTH_TIMEOUT_MS = 120000; // 2 minutes timeout for OAuth flow
 
 // Rate Limiting
@@ -279,79 +278,45 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
 }
 
 /**
- * Get OAuth token using chrome.identity.launchWebAuthFlow
- * This method works with Chromium-based browsers (Arc, Brave, Dia, etc.)
+ * Get OAuth token using chrome.identity.getAuthToken (better UX)
+ * Uses Chrome's built-in account picker with full-screen UI
  */
 async function getAuthToken(forceRefresh = false) {
-  // Check if we have a cached token first (unless forcing refresh)
-  if (!forceRefresh) {
-    const cachedToken = await getCachedToken();
-    if (cachedToken) {
-      return cachedToken;
-    }
-  }
-
-  // Get client ID from manifest
-  const manifest = chrome.runtime.getManifest();
-  const clientId = manifest.oauth2.client_id;
-  const scopes = manifest.oauth2.scopes.join(' ');
-  const redirectUri = chrome.identity.getRedirectURL();
-
-  // Build OAuth URL
-  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-  authUrl.searchParams.set('client_id', clientId);
-  authUrl.searchParams.set('response_type', 'token');
-  authUrl.searchParams.set('redirect_uri', redirectUri);
-  authUrl.searchParams.set('scope', scopes);
-
-  // Add prompt=consent if forcing refresh to get new token
-  if (forceRefresh) {
-    authUrl.searchParams.set('prompt', 'consent');
-  }
-
   return new Promise((resolve, reject) => {
     // Add timeout for OAuth flow
     const timeout = setTimeout(() => {
       reject(new Error('OAuth flow timed out. Please try again.'));
     }, OAUTH_TIMEOUT_MS);
 
-    chrome.identity.launchWebAuthFlow(
+    chrome.identity.getAuthToken(
       {
-        url: authUrl.toString(),
-        interactive: true
+        interactive: true,
+        // Clear cache if forcing refresh
+        ...(forceRefresh && { scopes: chrome.runtime.getManifest().oauth2.scopes })
       },
-      (responseUrl) => {
+      (token) => {
         clearTimeout(timeout);
 
         if (chrome.runtime.lastError) {
+          // If forcing refresh and got cached token error, remove cached token and retry
+          if (forceRefresh && chrome.runtime.lastError.message?.includes('cached')) {
+            chrome.identity.removeCachedAuthToken({ token: '' }, () => {
+              // Retry without forceRefresh to get new token
+              getAuthToken(false).then(resolve).catch(reject);
+            });
+            return;
+          }
+
           reject(new Error(`OAuth failed: ${chrome.runtime.lastError.message}`));
           return;
         }
 
-        if (!responseUrl) {
-          reject(new Error('No response URL from OAuth flow. Did you cancel authorization?'));
+        if (!token) {
+          reject(new Error('No access token received. Did you cancel authorization?'));
           return;
         }
 
-        // Extract access token from redirect URL
-        const url = new URL(responseUrl);
-        const params = new URLSearchParams(url.hash.substring(1)); // Remove # and parse
-        const accessToken = params.get('access_token');
-        const expiresIn = params.get('expires_in');
-
-        if (!accessToken) {
-          reject(new Error('No access token in OAuth response'));
-          return;
-        }
-
-        // Cache the token with expiration time
-        const expiresAt = Date.now() + (parseInt(expiresIn) || 3600) * 1000;
-        chrome.storage.local.set({
-          access_token: accessToken,
-          token_expires_at: expiresAt
-        });
-
-        resolve(accessToken);
+        resolve(token);
       }
     );
   });
@@ -417,24 +382,6 @@ async function fetchWithTokenRefresh(url, token, options = {}) {
     }
 
     return response;
-  });
-}
-
-/**
- * Get cached token if still valid
- */
-async function getCachedToken() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['access_token', 'token_expires_at'], (result) => {
-      if (result.access_token && result.token_expires_at) {
-        // Check if token is still valid (with buffer before expiry)
-        if (Date.now() < result.token_expires_at - TOKEN_EXPIRY_BUFFER) {
-          resolve(result.access_token);
-          return;
-        }
-      }
-      resolve(null);
-    });
   });
 }
 
