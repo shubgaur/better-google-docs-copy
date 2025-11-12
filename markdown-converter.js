@@ -381,6 +381,11 @@ function insertInlineComments(text, commentsMap, options, insertedCommentIds = n
 
   const commentFormat = options.commentFormat || 'xml';
 
+  // Skip inline insertion for 'quoted-context' format - all comments should appear at the end
+  if (commentFormat === 'quoted-context') {
+    return text;
+  }
+
   // Normalize text for matching (remove extra whitespace, lowercase)
   const normalizeForMatching = (str) => {
     return str.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -430,8 +435,8 @@ function insertInlineComments(text, commentsMap, options, insertedCommentIds = n
             // Mark this comment as inserted inline
             insertedCommentIds.add(comment.id);
           }
-        } else if (commentFormat === 'blockquote') {
-          // Blockquote format
+        } else {
+          // Blockquote format (default fallback)
           for (const comment of commentsList) {
             commentMarker += `\n> 💬 **${escapeMarkdown(comment.author)}**: ${escapeMarkdown(comment.content)}`;
             if (comment.replies && comment.replies.length > 0) {
@@ -439,31 +444,6 @@ function insertInlineComments(text, commentsMap, options, insertedCommentIds = n
                 commentMarker += `\n> → **${escapeMarkdown(reply.author)}**: ${escapeMarkdown(reply.content)}`;
               }
             }
-
-            // Mark this comment as inserted inline
-            insertedCommentIds.add(comment.id);
-          }
-        } else if (commentFormat === 'quoted-context') {
-          // Quoted context format - show quoted text snippet with author/comment
-          for (const comment of commentsList) {
-            if (comment.quotedText) {
-              const maxQuoteLength = 50;
-              let quotedText = comment.quotedText.trim();
-              if (quotedText.length > maxQuoteLength) {
-                quotedText = quotedText.substring(0, maxQuoteLength) + '...';
-              }
-              commentMarker += `\n<!-- > ${quotedText}`;
-              commentMarker += `\n${comment.author}: "${comment.content}"`;
-            } else {
-              commentMarker += `\n<!-- ${comment.author}: "${comment.content}"`;
-            }
-
-            if (comment.replies && comment.replies.length > 0) {
-              for (const reply of comment.replies) {
-                commentMarker += `\n  ${reply.author}: "${reply.content}"`;
-              }
-            }
-            commentMarker += ' -->';
 
             // Mark this comment as inserted inline
             insertedCommentIds.add(comment.id);
@@ -632,16 +612,17 @@ function formatCommentsWithQuotedContext(comments) {
         quotedText = quotedText.substring(0, maxQuoteLength) + '...';
       }
 
-      commentParts.push(`> ${quotedText}\n`);
+      // Escape XML special characters since this is wrapped in <comments> tags
+      commentParts.push(`> ${escapeXml(quotedText)}\n`);
     }
 
-    // Main comment with author
-    commentParts.push(`${comment.author}: "${comment.content}"\n`);
+    // Main comment with author (escape XML to prevent injection)
+    commentParts.push(`${escapeXml(comment.author)}: "${escapeXml(comment.content)}"\n`);
 
     // Replies
     if (comment.replies && comment.replies.length > 0) {
       for (const reply of comment.replies) {
-        commentParts.push(`  ${reply.author}: "${reply.content}"\n`);
+        commentParts.push(`  ${escapeXml(reply.author)}: "${escapeXml(reply.content)}"\n`);
       }
     }
 
