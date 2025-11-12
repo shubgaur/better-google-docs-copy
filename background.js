@@ -768,11 +768,32 @@ function validateCommentsAgainstDocument(comments, doc, documentId) {
 
     const normalizedQuoted = aggressiveNormalize(comment.quotedText);
 
-    // Check if quoted text appears in document
-    const isValid = normalizedFullText.includes(normalizedQuoted);
+    // Check if quoted text is truncated (Drive API often truncates long quotes)
+    const isTruncated = comment.quotedText.endsWith('...') || normalizedQuoted.length < 10;
 
-    if (!isValid) {
-      console.warn(`[DOC ${documentId}] INVALID COMMENT FILTERED: "${comment.quotedText.substring(0, 50)}..." not found in document. Comment author: ${comment.author}`);
+    let isValid;
+    if (isTruncated) {
+      // For truncated text, check if the beginning appears in the document
+      // Remove trailing "..." if present and use partial match
+      const searchText = normalizedQuoted.replace(/\.+$/, '').trim();
+
+      // Need at least 5 characters for a meaningful partial match
+      if (searchText.length >= 5) {
+        isValid = normalizedFullText.includes(searchText);
+        if (!isValid) {
+          console.warn(`[DOC ${documentId}] TRUNCATED COMMENT FILTERED: "${comment.quotedText.substring(0, 50)}..." not found in document. Comment author: ${comment.author}`);
+        }
+      } else {
+        // Too short to validate reliably, include it anyway
+        console.log(`[DOC ${documentId}] Comment quote too short to validate ("${comment.quotedText}"), including it. Author: ${comment.author}`);
+        isValid = true;
+      }
+    } else {
+      // For non-truncated text, require exact match
+      isValid = normalizedFullText.includes(normalizedQuoted);
+      if (!isValid) {
+        console.warn(`[DOC ${documentId}] INVALID COMMENT FILTERED: "${comment.quotedText.substring(0, 50)}..." not found in document. Comment author: ${comment.author}`);
+      }
     }
 
     return isValid;
