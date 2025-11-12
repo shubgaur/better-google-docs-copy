@@ -1,8 +1,25 @@
 // Content Script - Injects UI into Google Docs
 
-// Constants
-const MAX_RETRIES = 20;
-const MIN_CLIPBOARD_LENGTH = 20; // Minimum clipboard text length to consider as selection
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+// UI Initialization
+const MAX_RETRIES = 20; // Maximum attempts to find Google Docs toolbar
+const RETRY_DELAY_MS = 500; // Delay between toolbar search attempts
+
+// Selection Detection
+const MIN_SELECTION_LENGTH = 20; // Minimum character count to consider as valid selection
+
+// Dropdown Menu
+const DROPDOWN_HEIGHT_ESTIMATE = 500; // Estimated dropdown height for positioning
+
+// Notification
+const NOTIFICATION_DURATION_MS = 4000; // How long to show success/error notifications
+const NOTIFICATION_FADE_DURATION_MS = 300; // Animation duration for notification fade
+
+// Filename
+const MAX_FILENAME_LENGTH = 100; // Maximum length for downloaded filenames
 
 // Wait for Google Docs toolbar to load
 let retryCount = 0;
@@ -17,7 +34,7 @@ function init() {
     injectCopyButton(toolbar);
   } else if (retryCount < MAX_RETRIES) {
     retryCount++;
-    setTimeout(init, 500);
+    setTimeout(init, RETRY_DELAY_MS);
   } else {
     console.error('Google Docs Copy Extension: Failed to find toolbar');
   }
@@ -126,7 +143,14 @@ function injectCopyButton(toolbar) {
       mode: 'doc-only',
       icon: chrome.runtime.getURL('icons/menu/text_icon.png'),
       title: 'Copy Doc as Markdown',
-      description: 'Just the document text',
+      description: 'Formatted markdown with structure',
+      action: 'copy'
+    },
+    {
+      mode: 'plain-text',
+      icon: chrome.runtime.getURL('icons/menu/text_icon.png'),
+      title: 'Copy as Plain Text',
+      description: 'Raw text without formatting',
       action: 'copy'
     },
     {
@@ -201,14 +225,54 @@ function injectCopyButton(toolbar) {
     // Capture current selection using window.getSelection()
     const selectionInfo = getSelectionInfo();
 
-    if (selectionInfo && selectionInfo.text.trim().length >= MIN_CLIPBOARD_LENGTH) {
+    if (selectionInfo && selectionInfo.text.trim().length >= MIN_SELECTION_LENGTH) {
       currentSelection = selectionInfo;
     } else {
       currentSelection = null;
     }
 
     const isVisible = dropdown.style.display === 'block';
-    dropdown.style.display = isVisible ? 'none' : 'block';
+
+    if (isVisible) {
+      dropdown.style.display = 'none';
+    } else {
+      dropdown.style.display = 'block';
+
+      // Update selection note based on whether text is selected
+      if (currentSelection) {
+        const charCount = currentSelection.text.length;
+        selectionNote.textContent = `✓ Selection detected (${charCount} characters) - will copy selected text only`;
+        selectionNote.style.color = '#1a73e8';
+        selectionNote.style.fontWeight = '500';
+      } else {
+        selectionNote.textContent = 'Tip: Select text in the document, then click here to copy only your selection.';
+        selectionNote.style.color = '#666';
+        selectionNote.style.fontWeight = 'normal';
+      }
+
+      // Auto-position dropdown based on available space
+      const buttonRect = mainButton.getBoundingClientRect();
+      const dropdownRect = dropdown.getBoundingClientRect();
+      const viewportHeight = window.innerHeight;
+
+      // Check if dropdown would go off bottom of screen
+      const spaceBelow = viewportHeight - buttonRect.bottom;
+      const dropdownHeight = dropdownRect.height || DROPDOWN_HEIGHT_ESTIMATE;
+
+      if (spaceBelow < dropdownHeight && buttonRect.top > dropdownHeight) {
+        // Flip upward
+        dropdown.style.top = 'auto';
+        dropdown.style.bottom = '100%';
+        dropdown.style.marginTop = '0';
+        dropdown.style.marginBottom = '8px';
+      } else {
+        // Default downward position
+        dropdown.style.top = '100%';
+        dropdown.style.bottom = 'auto';
+        dropdown.style.marginTop = '8px';
+        dropdown.style.marginBottom = '0';
+      }
+    }
   });
 
   // Close dropdown when clicking outside
@@ -249,9 +313,9 @@ function getDocumentId() {
 }
 
 /**
- * Main copy function
+ * Process document (copy or download)
  */
-async function copyDocument(mode) {
+async function processDocument(mode, isDownload = false) {
   const documentId = getDocumentId();
 
   if (!documentId) {
@@ -261,56 +325,8 @@ async function copyDocument(mode) {
 
   // Show loading notification
   const selectionType = currentSelection ? 'selected text' : 'document';
-  showNotification(`Preparing ${selectionType}...`, 'loading');
-
-  try {
-    // Send message to background script to process the document
-    const response = await chrome.runtime.sendMessage({
-      action: 'copyDocument',
-      documentId: documentId,
-      mode: mode,
-      selection: currentSelection, // Pass selection info if available
-      forceRefresh: true // Always get fresh data when user clicks button
-    });
-
-    if (response.success) {
-      // Copy markdown to clipboard
-      await navigator.clipboard.writeText(response.markdown);
-
-      // Show success notification with stats
-      const stats = response.stats;
-      let message = `✓ Copied! ${stats.characters} chars, ${stats.images} images, ${stats.comments} comments`;
-
-      // Add warnings if present
-      if (response.warnings && response.warnings.length > 0) {
-        message += ` (⚠ ${response.warnings.join(', ')})`;
-      }
-
-      showNotification(message, 'success');
-    } else {
-      showNotification(`Error: ${response.error}`, 'error');
-    }
-
-  } catch (error) {
-    console.error('Copy failed:', error);
-    showNotification(`Error: ${error.message}`, 'error');
-  }
-}
-
-/**
- * Download document as .md file
- */
-async function downloadDocument(mode) {
-  const documentId = getDocumentId();
-
-  if (!documentId) {
-    showNotification('Error: Could not find document ID', 'error');
-    return;
-  }
-
-  // Show loading notification
-  const selectionType = currentSelection ? 'selected text' : 'document';
-  showNotification(`Preparing ${selectionType} for download...`, 'loading');
+  const action = isDownload ? 'for download' : '';
+  showNotification(`Preparing ${selectionType} ${action}...`, 'loading');
 
   try {
     // Send message to background script to process the document
@@ -323,34 +339,37 @@ async function downloadDocument(mode) {
     });
 
     if (response.success) {
-      // Get document title from URL or use default
-      const docTitle = document.title.replace(' - Google Docs', '') || 'document';
-      // Sanitize filename: keep alphanumeric, spaces, hyphens, underscores, apostrophes, and parentheses
-      // Replace invalid filename characters and collapse multiple spaces/dashes
-      const filename = `${docTitle
-        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '') // Remove invalid filename characters
-        .replace(/\s+/g, ' ') // Collapse multiple spaces
-        .replace(/\.+$/g, '') // Remove trailing dots
-        .trim()
-        .substring(0, 100) || 'document'}.md`; // Limit length
-
-      // Create blob and download
-      const blob = new Blob([response.markdown], { type: 'text/markdown' });
-      const url = URL.createObjectURL(blob);
-
-      // Trigger download
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-
-      // Clean up
-      URL.revokeObjectURL(url);
-
-      // Show success notification
       const stats = response.stats;
-      let message = `✓ Downloaded ${filename}! ${stats.characters} chars, ${stats.images} images, ${stats.comments} comments`;
+      let message = '';
 
+      if (isDownload) {
+        // Download flow
+        const docTitle = document.title.replace(' - Google Docs', '') || 'document';
+        const filename = `${docTitle
+          .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
+          .replace(/\s+/g, ' ')
+          .replace(/\.+$/g, '')
+          .trim()
+          .substring(0, MAX_FILENAME_LENGTH) || 'document'}.md`;
+
+        const blob = new Blob([response.markdown], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+
+        URL.revokeObjectURL(url);
+
+        message = `✓ Downloaded ${filename}! ${stats.characters} chars, ${stats.images} images, ${stats.comments} comments`;
+      } else {
+        // Copy flow
+        await navigator.clipboard.writeText(response.markdown);
+        message = `✓ Copied! ${stats.characters} chars, ${stats.images} images, ${stats.comments} comments`;
+      }
+
+      // Add warnings if present
       if (response.warnings && response.warnings.length > 0) {
         message += ` (⚠ ${response.warnings.join(', ')})`;
       }
@@ -361,9 +380,23 @@ async function downloadDocument(mode) {
     }
 
   } catch (error) {
-    console.error('Download failed:', error);
+    console.error(`${isDownload ? 'Download' : 'Copy'} failed:`, error);
     showNotification(`Error: ${error.message}`, 'error');
   }
+}
+
+/**
+ * Main copy function
+ */
+async function copyDocument(mode) {
+  return processDocument(mode, false);
+}
+
+/**
+ * Download document as .md file
+ */
+async function downloadDocument(mode) {
+  return processDocument(mode, true);
 }
 
 /**
@@ -384,12 +417,12 @@ function showNotification(message, type = 'info') {
 
   document.body.appendChild(notification);
 
-  // Auto-remove after 4 seconds (except for loading)
+  // Auto-remove after specified duration (except for loading)
   if (type !== 'loading') {
     setTimeout(() => {
       notification.classList.add('gdoc-copy-notification-fade');
-      setTimeout(() => notification.remove(), 300);
-    }, 4000);
+      setTimeout(() => notification.remove(), NOTIFICATION_FADE_DURATION_MS);
+    }, NOTIFICATION_DURATION_MS);
   }
 }
 
@@ -409,3 +442,14 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+
+// Listen for keyboard shortcut trigger from background script
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'triggerCopyMenu') {
+    // Find and click the main button to open the dropdown
+    const button = document.querySelector('.gdoc-copy-btn');
+    if (button) {
+      button.click();
+    }
+  }
+});

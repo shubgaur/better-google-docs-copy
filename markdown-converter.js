@@ -1,10 +1,55 @@
 // Markdown Converter - Converts Google Docs API response to Markdown
 
 /**
+ * Extract plain text from document (no formatting)
+ */
+function extractPlainText(doc) {
+  let plainText = '';
+
+  // Add document title if available
+  if (doc.title && doc.title.trim()) {
+    plainText += `${doc.title}\n\n`;
+  }
+
+  // Process document body
+  if (doc.body && doc.body.content) {
+    for (const element of doc.body.content) {
+      if (element.paragraph && element.paragraph.elements) {
+        for (const elem of element.paragraph.elements) {
+          if (elem.textRun && elem.textRun.content) {
+            plainText += elem.textRun.content;
+          }
+        }
+      }
+    }
+  }
+
+  return plainText;
+}
+
+/**
  * Main conversion function
  */
 function convertToMarkdown(doc, images, comments, options) {
+  // If plain text only mode, extract and return plain text
+  if (options.plainTextOnly) {
+    return extractPlainText(doc);
+  }
+
   const imagesMap = new Map(images.map(img => [img.id, img]));
+  const footnotesMap = new Map();
+  let footnoteCounter = 1;
+
+  // Build footnotes map
+  if (doc.footnotes) {
+    for (const [footnoteId, footnote] of Object.entries(doc.footnotes)) {
+      footnotesMap.set(footnoteId, {
+        number: footnoteCounter++,
+        content: footnote.content
+      });
+    }
+  }
+
   let markdown = '';
 
   // Add document title if available (use doc.title, not body content)
@@ -24,7 +69,16 @@ function convertToMarkdown(doc, images, comments, options) {
         contentToProcess = contentToProcess.slice(1);
       }
     }
-    markdown += processContent(contentToProcess, imagesMap, doc, options);
+    markdown += processContent(contentToProcess, imagesMap, doc, options, footnotesMap);
+  }
+
+  // Append footnotes if any exist
+  if (footnotesMap.size > 0) {
+    markdown += '\n---\n\n## Footnotes\n\n';
+    for (const [footnoteId, footnoteData] of footnotesMap.entries()) {
+      const footnoteContent = processContent(footnoteData.content, imagesMap, doc, options, footnotesMap);
+      markdown += `[^${footnoteData.number}]: ${footnoteContent.trim()}\n\n`;
+    }
   }
 
   // Append comments section if requested
@@ -55,14 +109,14 @@ function convertToMarkdown(doc, images, comments, options) {
 /**
  * Process document content recursively
  */
-function processContent(content, imagesMap, doc, options) {
+function processContent(content, imagesMap, doc, options, footnotesMap) {
   let markdown = '';
 
   for (const element of content) {
     if (element.paragraph) {
-      markdown += processParagraph(element.paragraph, imagesMap, doc, options);
+      markdown += processParagraph(element.paragraph, imagesMap, doc, options, footnotesMap);
     } else if (element.table) {
-      markdown += processTable(element.table, imagesMap, doc, options);
+      markdown += processTable(element.table, imagesMap, doc, options, footnotesMap);
     } else if (element.tableOfContents) {
       markdown += '> *Table of Contents*\n\n';
     } else if (element.sectionBreak) {
@@ -76,7 +130,7 @@ function processContent(content, imagesMap, doc, options) {
 /**
  * Process a paragraph element
  */
-function processParagraph(paragraph, imagesMap, doc, options) {
+function processParagraph(paragraph, imagesMap, doc, options, footnotesMap) {
   let text = '';
   let isListItem = false;
   let listLevel = 0;
@@ -119,6 +173,13 @@ function processParagraph(paragraph, imagesMap, doc, options) {
           // Use image title if available for better alt text
           const altText = image.title || 'Image';
           text += `![${altText}](${image.url})`;
+        }
+      } else if (elem.footnoteReference && footnotesMap) {
+        // Add footnote reference
+        const footnoteId = elem.footnoteReference.footnoteId;
+        const footnoteData = footnotesMap.get(footnoteId);
+        if (footnoteData) {
+          text += `[^${footnoteData.number}]`;
         }
       }
     }
@@ -246,7 +307,7 @@ function processTextRun(textRun) {
 /**
  * Process a table element
  */
-function processTable(table, imagesMap, doc, options) {
+function processTable(table, imagesMap, doc, options, footnotesMap) {
   let markdown = '\n';
 
   if (!table.tableRows || table.tableRows.length === 0) {
@@ -265,7 +326,7 @@ function processTable(table, imagesMap, doc, options) {
     for (const cell of cells) {
       let cellText = '';
       if (cell.content) {
-        cellText = processContent(cell.content, imagesMap, doc, options).trim();
+        cellText = processContent(cell.content, imagesMap, doc, options, footnotesMap).trim();
         // Remove extra newlines from cell content
         cellText = cellText.replace(/\n+/g, ' ');
       }

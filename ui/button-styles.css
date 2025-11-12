@@ -98,9 +98,8 @@
 /* Toast Notifications */
 .gdoc-copy-notification {
   position: fixed;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 80px;
+  right: 24px;
   padding: 12px 24px;
   background: #323232;
   color: white;
@@ -109,31 +108,32 @@
   font-size: 14px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   z-index: 10001;
-  animation: slideUp 0.3s ease-out;
+  max-width: 400px;
+  animation: slideInRight 0.3s ease-out;
 }
 
-@keyframes slideUp {
+@keyframes slideInRight {
   from {
-    transform: translateX(-50%) translateY(20px);
+    transform: translateX(100%);
     opacity: 0;
   }
   to {
-    transform: translateX(-50%) translateY(0);
+    transform: translateX(0);
     opacity: 1;
   }
 }
 
 .gdoc-copy-notification-fade {
-  animation: slideDown 0.3s ease-out forwards;
+  animation: slideOutRight 0.3s ease-out forwards;
 }
 
-@keyframes slideDown {
+@keyframes slideOutRight {
   from {
-    transform: translateX(-50%) translateY(0);
+    transform: translateX(0);
     opacity: 1;
   }
   to {
-    transform: translateX(-50%) translateY(20px);
+    transform: translateX(100%);
     opacity: 0;
   }
 }

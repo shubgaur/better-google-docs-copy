@@ -47,6 +47,16 @@
     "128": "icons/icon128.png"
   },
 
+  "commands": {
+    "trigger-copy": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+M",
+        "mac": "Command+Shift+M"
+      },
+      "description": "Open Copy for LLM menu"
+    }
+  },
+
   "web_accessible_resources": [
     {
       "resources": [

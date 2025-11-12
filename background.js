@@ -3,17 +3,36 @@
 // Import markdown converter
 importScripts('markdown-converter.js');
 
-// Constants for selection filtering
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+// Selection Detection
 const MIN_CLIPBOARD_LENGTH = 20; // Minimum clipboard text length to consider as selection
 const FUZZY_MATCH_CHUNK_SIZE = 100; // Characters to use for fuzzy matching fallback
+
+// Authentication
 const TOKEN_EXPIRY_BUFFER = 5 * 60 * 1000; // 5 minutes buffer before token expiry
+const OAUTH_TIMEOUT_MS = 120000; // 2 minutes timeout for OAuth flow
 
-// Rate limiting
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 10; // Max 10 requests per minute
+// Rate Limiting
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute time window
+const MAX_REQUESTS_PER_WINDOW = 10; // Max requests per time window
+
+// Caching
+const CACHE_TTL_MS = 30 * 1000; // 30 seconds (matches service worker lifetime)
+
+// Retry Logic
+const MAX_RETRY_ATTEMPTS = 3; // Maximum retry attempts for failed requests
+const BASE_RETRY_DELAY_MS = 1000; // Base delay for exponential backoff (1 second)
+
+// Image Processing
+const MAX_IMAGE_WARNING_THRESHOLD = 10; // Warn if more than this many images
+const IMAGE_CONTEXT_MAX_LENGTH = 30; // Max characters for image context text
+const IMAGE_FILENAME_MAX_LENGTH = 50; // Max length for sanitized title in filenames
+
+// Data structures
 const requestTimestamps = [];
-
-// Request deduplication: Maps documentId -> pending promise
 const pendingRequests = new Map();
 
 // Message handler for content script requests
@@ -40,6 +59,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+// Keyboard shortcut handler
+chrome.commands.onCommand.addListener((command) => {
+  if (command === 'trigger-copy') {
+    // Send message to active tab to trigger the copy menu
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0] && tabs[0].url && tabs[0].url.includes('docs.google.com/document')) {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'triggerCopyMenu' });
+      }
+    });
+  }
+});
+
 /**
  * Get user settings from chrome.storage
  */
@@ -63,7 +94,7 @@ function checkRateLimit() {
   const now = Date.now();
 
   // Remove timestamps outside the window
-  while (requestTimestamps.length > 0 && requestTimestamps[0] < now - RATE_LIMIT_WINDOW) {
+  while (requestTimestamps.length > 0 && requestTimestamps[0] < now - RATE_LIMIT_WINDOW_MS) {
     requestTimestamps.shift();
   }
 
@@ -92,7 +123,12 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
   // Create the promise and store it for deduplication
   const requestPromise = (async () => {
     try {
-      // Step 0: Check rate limit
+      // Step 0: Check if online
+      if (!navigator.onLine) {
+        throw new Error('You are offline. Please check your internet connection and try again.');
+      }
+
+      // Step 1: Check rate limit
       if (!checkRateLimit()) {
         throw new Error('Rate limit exceeded. Please wait a moment before trying again.');
       }
@@ -104,7 +140,7 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
         documentCache.delete(documentId);
       }
 
-    // Step 1: Get OAuth token
+    // Step 2: Get OAuth token
     const token = await getAuthToken();
 
     // Step 2: Get user settings
@@ -118,6 +154,7 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
       includeComments: mode === 'doc-and-comments' || mode === 'doc-comments-images' || mode === 'doc-comments-images-download',
       includeImages: mode === 'doc-comments-images' || mode === 'doc-comments-images-download',
       downloadImages: mode === 'doc-comments-images-download',
+      plainTextOnly: mode === 'plain-text',
       // Add settings
       headingStyle: settings.headingStyle || 'atx',
       commentFormat: settings.commentFormat || 'xml',
@@ -168,6 +205,12 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
     if (options.includeComments && commentsResult.status === 'rejected') {
       console.error('Failed to fetch comments:', commentsResult.reason);
       warnings.push('Failed to fetch comments');
+    }
+
+    // Warn if downloading many images
+    if (options.downloadImages && images.length > MAX_IMAGE_WARNING_THRESHOLD) {
+      warnings.push(`${images.length} images - this may take a while`);
+      console.warn(`Downloading ${images.length} images - this may take some time`);
     }
 
     // Step 7: Convert to markdown (will be handled by markdown-converter.js)
@@ -231,19 +274,26 @@ async function getAuthToken(forceRefresh = false) {
   }
 
   return new Promise((resolve, reject) => {
+    // Add timeout for OAuth flow
+    const timeout = setTimeout(() => {
+      reject(new Error('OAuth flow timed out. Please try again.'));
+    }, OAUTH_TIMEOUT_MS);
+
     chrome.identity.launchWebAuthFlow(
       {
         url: authUrl.toString(),
         interactive: true
       },
       (responseUrl) => {
+        clearTimeout(timeout);
+
         if (chrome.runtime.lastError) {
           reject(new Error(`OAuth failed: ${chrome.runtime.lastError.message}`));
           return;
         }
 
         if (!responseUrl) {
-          reject(new Error('No response URL from OAuth flow'));
+          reject(new Error('No response URL from OAuth flow. Did you cancel authorization?'));
           return;
         }
 
@@ -274,7 +324,7 @@ async function getAuthToken(forceRefresh = false) {
 /**
  * Retry a function with exponential backoff
  */
-async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
+async function retryWithBackoff(fn, maxRetries = MAX_RETRY_ATTEMPTS, baseDelay = BASE_RETRY_DELAY_MS) {
   let lastError;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -354,8 +404,6 @@ async function getCachedToken() {
 
 // Document cache: Maps documentId -> { doc, timestamp, revisionId }
 const documentCache = new Map();
-// Set TTL to 30 seconds to match service worker lifetime (service workers shut down after ~30s of inactivity)
-const CACHE_TTL = 30 * 1000; // 30 seconds
 
 // Comment cache: Maps documentId -> { comments, timestamp }
 const commentCache = new Map();
@@ -393,7 +441,7 @@ if (typeof globalThis !== 'undefined') {
 async function getDocumentContent(documentId, token) {
   // Check cache first
   const cached = documentCache.get(documentId);
-  if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+  if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
     return cached.doc;
   }
 
@@ -418,6 +466,42 @@ async function getDocumentContent(documentId, token) {
 }
 
 /**
+ * Find context text for an image by searching document paragraphs
+ */
+function findImageContext(doc, objectId) {
+  if (!doc.body || !doc.body.content) {
+    return '';
+  }
+
+  for (const element of doc.body.content) {
+    if (element.paragraph && element.paragraph.elements) {
+      // Check if this paragraph contains the image
+      const hasImage = element.paragraph.elements.some(
+        elem => elem.inlineObjectElement?.inlineObjectId === objectId
+      );
+
+      if (hasImage) {
+        // Extract text from this paragraph
+        let contextText = '';
+        for (const elem of element.paragraph.elements) {
+          if (elem.textRun && elem.textRun.content) {
+            contextText += elem.textRun.content;
+          }
+        }
+        // Clean and limit context text
+        return contextText
+          .replace(/\n+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .substring(0, IMAGE_CONTEXT_MAX_LENGTH);
+      }
+    }
+  }
+
+  return '';
+}
+
+/**
  * Extract and download images from document (with parallel downloads)
  */
 async function extractImages(doc, token, shouldDownload = false, docTitle = 'google-doc') {
@@ -433,7 +517,7 @@ async function extractImages(doc, token, shouldDownload = false, docTitle = 'goo
     .replace(/-+/g, '-') // Collapse multiple dashes
     .replace(/^-|-$/g, '') // Remove leading/trailing dashes
     .trim()
-    .substring(0, 50); // Limit length
+    .substring(0, IMAGE_FILENAME_MAX_LENGTH);
 
   // Collect all image info first
   const imageInfos = [];
@@ -464,10 +548,25 @@ async function extractImages(doc, token, shouldDownload = false, docTitle = 'goo
     // Extract title or description for better alt text
     const title = embeddedObject.title || embeddedObject.description || '';
 
+    // Find context from surrounding text
+    const context = findImageContext(doc, objectId);
+
+    // Build filename with context if available
+    let filename = sanitizedTitle;
+    if (context) {
+      const sanitizedContext = context
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+      filename += `-${sanitizedContext}`;
+    }
+    filename += `-${imageIndex}.png`;
+
     imageInfos.push({
       objectId,
       imageUri,
-      filename: `${sanitizedTitle}-image-${imageIndex}.png`,
+      filename,
       title: title.trim()
     });
   }
@@ -546,7 +645,7 @@ async function getComments(documentId, token, documentContent = null) {
 
   // Check cache first
   const cached = commentCache.get(documentId);
-  if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+  if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
     console.log(`✓ Using cached comments for ${documentId} (${cached.comments.length} comments, age: ${Math.round((Date.now() - cached.timestamp) / 1000)}s)`);
     return cached.comments;
   }
