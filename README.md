@@ -23,6 +23,8 @@ You want to share a Google Doc with an LLM, so you copy it as markdown. But then
 - **Download as `.md` files** — Save for later or share easily
 - **Privacy-first** — All processing happens locally in your browser
 
+<img width="1206" height="1166" alt="screenshot Cold Plunge - Google Doc… 11-11-2025@2x" src="https://github.com/user-attachments/assets/414000b6-a7dc-4d3f-b373-05b9458871e9" />
+
 ---
 
 ## How to Use
