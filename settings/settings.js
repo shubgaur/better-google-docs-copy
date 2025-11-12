@@ -2,7 +2,6 @@
 
 // Default settings
 const DEFAULT_SETTINGS = {
-  quickCopyMode: 'doc-only',
   headingStyle: 'atx',
   commentFormat: 'blockquote',
   includeResolvedComments: false,
@@ -22,7 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
 function loadSettings() {
   chrome.storage.sync.get(DEFAULT_SETTINGS, (settings) => {
     // Populate form fields
-    document.getElementById('quickCopyMode').value = settings.quickCopyMode;
     document.getElementById('headingStyle').value = settings.headingStyle;
     document.getElementById('commentFormat').value = settings.commentFormat;
     document.getElementById('includeResolvedComments').checked = settings.includeResolvedComments;
@@ -54,7 +52,6 @@ function setupEventListeners() {
  */
 function saveSettings() {
   const settings = {
-    quickCopyMode: document.getElementById('quickCopyMode').value,
     headingStyle: document.getElementById('headingStyle').value,
     commentFormat: document.getElementById('commentFormat').value,
     includeResolvedComments: document.getElementById('includeResolvedComments').checked,

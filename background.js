@@ -37,23 +37,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-// Keyboard shortcut handler
-chrome.commands.onCommand.addListener((command) => {
-  if (command === 'copy-doc') {
-    // Get active tab and trigger copy with default mode
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      chrome.tabs.sendMessage(tabs[0].id, { action: 'triggerQuickCopy' });
-    });
-  }
-});
-
 /**
  * Get user settings from chrome.storage
  */
 async function getUserSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get({
-      quickCopyMode: 'doc-only',
       headingStyle: 'atx',
       commentFormat: 'xml',
       includeResolvedComments: true,

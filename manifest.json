@@ -31,16 +31,6 @@
     }
   ],
 
-  "commands": {
-    "copy-doc": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+M",
-        "mac": "Command+Shift+M"
-      },
-      "description": "Quick copy document as markdown"
-    }
-  },
-
   "options_page": "settings/settings.html",
 
   "oauth2": {

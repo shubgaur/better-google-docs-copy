@@ -2,25 +2,26 @@
 
 **Copy Google Docs as markdown for Claude, ChatGPT, and other AI assistants—with one click.**
 
-Stop wrestling with copy-paste formatting issues. This Chrome extension converts Google Docs to clean markdown, preserving formatting, images, and comments perfectly.
+---
+
+## The Problem
+
+You want to share a Google Doc with an LLM, so you copy it as markdown. But then:
+
+- **Comments are missing** — There's no way to copy comments without copying them one by one
+- **Image URLs are giant** — Google gives you massive, ugly URLs that crush your context window
+- **You lose context** — Your LLM can't see the full picture without comments and clean image references
+
+**This extension solves that.** Copy clean markdown with comments and images included—without wasting your context window on enormous URLs.
 
 ---
 
-## Why Use This?
+## What Makes It Special
 
-**Perfect for:**
-- Sharing documents with AI assistants (Claude, ChatGPT, Gemini, etc.)
-- Converting docs to markdown for documentation
-- Building knowledge bases
-- Creating notes with proper formatting
-- Preserving comment threads when sharing drafts
-
-**What makes it special:**
-- Copy selected text or entire documents
-- Include images and comment threads
-- Download as `.md` files
-- Fast caching system (no waiting for re-copies)
-- Privacy-first: All processing happens locally
+- **Copy selected text or entire documents** — Choose what you need
+- **Include images and comment threads** — Complete context for your LLM
+- **Download as `.md` files** — Save for later or share easily
+- **Privacy-first** — All processing happens locally in your browser
 
 ---
 
@@ -49,17 +50,12 @@ Stop wrestling with copy-paste formatting issues. This Chrome extension converts
 
 **Note**: Selection must be at least 20 characters
 
-### Keyboard Shortcut
-- **Ctrl+Shift+M** (Mac: Cmd+Shift+M) to quick-copy with your default mode
-- Customize: `chrome://extensions/shortcuts` → Find extension → Edit
-
 ---
 
 ## Settings
 
 Right-click extension icon → **Options** to customize:
 
-- **Quick Copy Mode**: Default mode for keyboard shortcut
 - **Heading Style**: ATX (`# Heading`) or Setext (underlined)
 - **Comment Format**: XML or Blockquote style
 - **Include Resolved Comments**: Toggle resolved comments on/off
@@ -111,18 +107,6 @@ Right-click extension icon → **Options** to customize:
 
 ## FAQ
 
-**Q: Does this work with Google Sheets or Slides?**
-A: Not yet. Currently supports Google Docs only.
-
-**Q: What browsers are supported?**
-A: Chrome, Arc, Brave, Edge, and any Chromium-based browser.
-
-**Q: Does it work on mobile?**
-A: No, Chrome extensions don't work on mobile browsers.
-
-**Q: What markdown flavor does it use?**
-A: GitHub-flavored Markdown (GFM).
-
 **Q: Is this open source?**
 A: Yes! MIT License—free to use, modify, and distribute.
 
@@ -166,27 +150,6 @@ A: Yes! **Bold**, *italic*, ~~strikethrough~~, `code`, links, headings, lists, a
 - Copy text first (Ctrl+C / Cmd+C)
 - Then click "Copy for LLM" button
 - Selection must be at least 20 characters
-
----
-
-## Contributing
-
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-**Ways to help:**
-- Report bugs
-- Suggest features
-- Improve docs
-- Submit pull requests
-- Star the repo
-
----
-
-## Credits
-
-**Created by**: [Shub Gaur](https://github.com/shubgaur)
-**License**: MIT
-**Built with**: Pure vanilla JavaScript (no dependencies)
 
 ---
 

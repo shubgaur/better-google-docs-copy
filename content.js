@@ -15,7 +15,6 @@ function init() {
 
   if (toolbar) {
     injectCopyButton(toolbar);
-    setupMessageListener();
   } else if (retryCount < MAX_RETRIES) {
     retryCount++;
     setTimeout(init, 500);
@@ -405,21 +404,6 @@ function hideLoadingNotification() {
   if (notification) {
     notification.remove();
   }
-}
-
-/**
- * Setup message listener for keyboard shortcuts
- */
-function setupMessageListener() {
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'triggerQuickCopy') {
-      // Use default mode from settings, or 'doc-only' as fallback
-      chrome.storage.sync.get(['quickCopyMode'], (result) => {
-        const mode = result.quickCopyMode || 'doc-only';
-        copyDocument(mode);
-      });
-    }
-  });
 }
 
 // Initialize when DOM is ready
