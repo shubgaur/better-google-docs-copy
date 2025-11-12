@@ -13,6 +13,9 @@ const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
 const MAX_REQUESTS_PER_WINDOW = 10; // Max 10 requests per minute
 const requestTimestamps = [];
 
+// Request deduplication: Maps documentId -> pending promise
+const pendingRequests = new Map();
+
 // Message handler for content script requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'copyDocument') {
@@ -46,7 +49,6 @@ async function getUserSettings() {
       headingStyle: 'atx',
       commentFormat: 'xml',
       includeResolvedComments: true,
-      imageQuality: 'high',
       showProgress: true
     }, (settings) => {
       resolve(settings);
@@ -79,18 +81,28 @@ function checkRateLimit() {
  * Main copy handler - orchestrates the entire copy process
  */
 async function handleCopyDocument(documentId, mode, selectionInfo = null, forceRefresh = false) {
-  try {
-    // Step 0: Check rate limit
-    if (!checkRateLimit()) {
-      throw new Error('Rate limit exceeded. Please wait a moment before trying again.');
-    }
+  // Check if there's already a pending request for this document
+  const requestKey = `${documentId}-${mode}-${JSON.stringify(selectionInfo)}`;
 
-    // If forceRefresh is true, clear caches for this document to get fresh data
-    if (forceRefresh) {
-      console.log(`Force refresh requested for document ${documentId} - clearing caches`);
-      commentCache.delete(documentId);
-      documentCache.delete(documentId);
-    }
+  if (pendingRequests.has(requestKey)) {
+    console.log(`Reusing pending request for ${documentId}`);
+    return pendingRequests.get(requestKey);
+  }
+
+  // Create the promise and store it for deduplication
+  const requestPromise = (async () => {
+    try {
+      // Step 0: Check rate limit
+      if (!checkRateLimit()) {
+        throw new Error('Rate limit exceeded. Please wait a moment before trying again.');
+      }
+
+      // If forceRefresh is true, clear caches for this document to get fresh data
+      if (forceRefresh) {
+        console.log(`Force refresh requested for document ${documentId} - clearing caches`);
+        commentCache.delete(documentId);
+        documentCache.delete(documentId);
+      }
 
     // Step 1: Get OAuth token
     const token = await getAuthToken();
@@ -161,21 +173,30 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
     // Step 7: Convert to markdown (will be handled by markdown-converter.js)
     const markdown = await convertToMarkdown(doc, images, comments, options);
 
-    return {
-      success: true,
-      markdown: markdown,
-      stats: {
-        characters: markdown.length,
-        images: images.length,
-        comments: comments.length
-      },
-      warnings: warnings.length > 0 ? warnings : undefined
-    };
+      return {
+        success: true,
+        markdown: markdown,
+        stats: {
+          characters: markdown.length,
+          images: images.length,
+          comments: comments.length
+        },
+        warnings: warnings.length > 0 ? warnings : undefined
+      };
 
-  } catch (error) {
-    console.error('Copy failed:', error);
-    throw error;
-  }
+    } catch (error) {
+      console.error('Copy failed:', error);
+      throw error;
+    } finally {
+      // Clean up pending request
+      pendingRequests.delete(requestKey);
+    }
+  })();
+
+  // Store the pending request
+  pendingRequests.set(requestKey, requestPromise);
+
+  return requestPromise;
 }
 
 /**
@@ -251,25 +272,66 @@ async function getAuthToken(forceRefresh = false) {
 }
 
 /**
- * Wrapper for fetch that automatically retries with refreshed token on 401
+ * Retry a function with exponential backoff
  */
-async function fetchWithTokenRefresh(url, token, options = {}) {
-  const headers = {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    ...options.headers
-  };
+async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
+  let lastError;
 
-  let response = await fetch(url, { ...options, headers });
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
 
-  // If 401, refresh token and retry once
-  if (response.status === 401) {
-    const newToken = await getAuthToken(true);
-    headers.Authorization = `Bearer ${newToken}`;
-    response = await fetch(url, { ...options, headers });
+      // Don't retry on auth errors or client errors (4xx except 429)
+      if (error.status && error.status >= 400 && error.status < 500 && error.status !== 429) {
+        throw error;
+      }
+
+      // If we've exhausted retries, throw
+      if (attempt === maxRetries) {
+        throw error;
+      }
+
+      // Calculate exponential backoff delay: baseDelay * 2^attempt
+      const delay = baseDelay * Math.pow(2, attempt);
+      console.log(`Request failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 
-  return response;
+  throw lastError;
+}
+
+/**
+ * Wrapper for fetch that automatically retries with refreshed token on 401 and handles transient errors
+ */
+async function fetchWithTokenRefresh(url, token, options = {}) {
+  return retryWithBackoff(async () => {
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...options.headers
+    };
+
+    let response = await fetch(url, { ...options, headers });
+
+    // If 401, refresh token and retry once
+    if (response.status === 401) {
+      const newToken = await getAuthToken(true);
+      headers.Authorization = `Bearer ${newToken}`;
+      response = await fetch(url, { ...options, headers });
+    }
+
+    // Throw error for non-ok responses to trigger retry logic
+    if (!response.ok && response.status >= 500) {
+      const error = new Error(`HTTP ${response.status}: ${response.statusText}`);
+      error.status = response.status;
+      throw error;
+    }
+
+    return response;
+  });
 }
 
 /**
@@ -292,7 +354,8 @@ async function getCachedToken() {
 
 // Document cache: Maps documentId -> { doc, timestamp, revisionId }
 const documentCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+// Set TTL to 30 seconds to match service worker lifetime (service workers shut down after ~30s of inactivity)
+const CACHE_TTL = 30 * 1000; // 30 seconds
 
 // Comment cache: Maps documentId -> { comments, timestamp }
 const commentCache = new Map();
@@ -364,10 +427,12 @@ async function extractImages(doc, token, shouldDownload = false, docTitle = 'goo
 
   // Sanitize document title for use in filename
   const sanitizedTitle = docTitle
-    .replace(/[^a-z0-9]/gi, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .toLowerCase()
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '') // Remove invalid filename characters
+    .replace(/\s+/g, '-') // Replace spaces with dashes for image filenames
+    .replace(/\.+$/g, '') // Remove trailing dots
+    .replace(/-+/g, '-') // Collapse multiple dashes
+    .replace(/^-|-$/g, '') // Remove leading/trailing dashes
+    .trim()
     .substring(0, 50); // Limit length
 
   // Collect all image info first
@@ -387,11 +452,23 @@ async function extractImages(doc, token, shouldDownload = false, docTitle = 'goo
       continue;
     }
 
+    // Validate image URL is from Google domains (security check)
+    const isValidGoogleUrl = /^https:\/\/.*\.google(usercontent|apis)\.com\//i.test(imageUri);
+    if (!isValidGoogleUrl) {
+      console.warn(`Skipping potentially unsafe image URL: ${imageUri}`);
+      continue;
+    }
+
     imageIndex++;
+
+    // Extract title or description for better alt text
+    const title = embeddedObject.title || embeddedObject.description || '';
+
     imageInfos.push({
       objectId,
       imageUri,
-      filename: `${sanitizedTitle}-image-${imageIndex}.png`
+      filename: `${sanitizedTitle}-image-${imageIndex}.png`,
+      title: title.trim()
     });
   }
 
@@ -400,7 +477,8 @@ async function extractImages(doc, token, shouldDownload = false, docTitle = 'goo
     return imageInfos.map(info => ({
       id: info.objectId,
       url: info.imageUri,
-      mimeType: 'image/png'
+      mimeType: 'image/png',
+      title: info.title || 'Image'
     }));
   }
 
@@ -436,7 +514,8 @@ async function extractImages(doc, token, shouldDownload = false, docTitle = 'goo
       return {
         id: info.objectId,
         url: info.filename,
-        mimeType: blob.type || 'image/png'
+        mimeType: blob.type || 'image/png',
+        title: info.title || 'Image'
       };
     } catch (error) {
       console.error(`Error downloading image ${info.objectId}:`, error);
@@ -655,12 +734,15 @@ function filterDocumentBySelection(doc, selectionInfo) {
   const selectionEnd = selectionStart + normalizedSelection.length;
 
   // Filter elements that overlap with selection
-  // We need to account for aggressive normalization when mapping back
+  // Pre-normalize all element text once to avoid repeated normalization
+  const normalizedElementTexts = elementMap.map(item => aggressiveNormalize(item.text));
+
   const selectedElements = [];
   let currentPos = 0;
 
-  for (const item of elementMap) {
-    const normalizedItemText = aggressiveNormalize(item.text);
+  for (let i = 0; i < elementMap.length; i++) {
+    const item = elementMap[i];
+    const normalizedItemText = normalizedElementTexts[i];
     const itemStart = currentPos;
     const itemEnd = currentPos + normalizedItemText.length;
 

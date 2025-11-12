@@ -3,9 +3,8 @@
 // Default settings
 const DEFAULT_SETTINGS = {
   headingStyle: 'atx',
-  commentFormat: 'blockquote',
-  includeResolvedComments: false,
-  imageQuality: 'high',
+  commentFormat: 'xml',
+  includeResolvedComments: true,
   showProgress: true
 };
 
@@ -24,7 +23,6 @@ function loadSettings() {
     document.getElementById('headingStyle').value = settings.headingStyle;
     document.getElementById('commentFormat').value = settings.commentFormat;
     document.getElementById('includeResolvedComments').checked = settings.includeResolvedComments;
-    document.getElementById('imageQuality').value = settings.imageQuality;
     document.getElementById('showProgress').checked = settings.showProgress;
   });
 }
@@ -55,7 +53,6 @@ function saveSettings() {
     headingStyle: document.getElementById('headingStyle').value,
     commentFormat: document.getElementById('commentFormat').value,
     includeResolvedComments: document.getElementById('includeResolvedComments').checked,
-    imageQuality: document.getElementById('imageQuality').value,
     showProgress: document.getElementById('showProgress').checked
   };
 

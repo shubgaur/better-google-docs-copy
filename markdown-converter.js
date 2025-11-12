@@ -8,7 +8,7 @@ function convertToMarkdown(doc, images, comments, options) {
   let markdown = '';
 
   // Add document title if available (use doc.title, not body content)
-  if (doc.title) {
+  if (doc.title && doc.title.trim()) {
     markdown += `# ${doc.title}\n\n`;
   }
 
@@ -24,7 +24,7 @@ function convertToMarkdown(doc, images, comments, options) {
         contentToProcess = contentToProcess.slice(1);
       }
     }
-    markdown += processContent(contentToProcess, imagesMap, options);
+    markdown += processContent(contentToProcess, imagesMap, doc, options);
   }
 
   // Append comments section if requested
@@ -55,14 +55,14 @@ function convertToMarkdown(doc, images, comments, options) {
 /**
  * Process document content recursively
  */
-function processContent(content, imagesMap, options) {
+function processContent(content, imagesMap, doc, options) {
   let markdown = '';
 
   for (const element of content) {
     if (element.paragraph) {
-      markdown += processParagraph(element.paragraph, imagesMap, options);
+      markdown += processParagraph(element.paragraph, imagesMap, doc, options);
     } else if (element.table) {
-      markdown += processTable(element.table, imagesMap, options);
+      markdown += processTable(element.table, imagesMap, doc, options);
     } else if (element.tableOfContents) {
       markdown += '> *Table of Contents*\n\n';
     } else if (element.sectionBreak) {
@@ -76,20 +76,34 @@ function processContent(content, imagesMap, options) {
 /**
  * Process a paragraph element
  */
-function processParagraph(paragraph, imagesMap, options) {
+function processParagraph(paragraph, imagesMap, doc, options) {
   let text = '';
   let isListItem = false;
   let listLevel = 0;
   let listType = 'unordered';
+  let listNumber = 1;
 
   // Check if this is a list item
   if (paragraph.bullet) {
     isListItem = true;
     listLevel = paragraph.bullet.nestingLevel || 0;
-    // Check if ordered or unordered
     const listId = paragraph.bullet.listId;
-    // For simplicity, we'll use unordered by default
-    // In a full implementation, you'd look up the list properties
+
+    // Look up list properties to determine if ordered or unordered
+    if (doc.lists && doc.lists[listId]) {
+      const listProperties = doc.lists[listId];
+      const nestingLevel = listProperties.listProperties?.nestingLevels?.[listLevel];
+
+      if (nestingLevel) {
+        // Check glyph type - if it's not a bullet, it's ordered
+        const glyphType = nestingLevel.glyphType;
+        if (glyphType && glyphType !== 'BULLET') {
+          listType = 'ordered';
+          // Get start number if specified
+          listNumber = nestingLevel.startNumber || 1;
+        }
+      }
+    }
   }
 
   // Process paragraph elements (text runs, inline objects, etc.)
@@ -102,7 +116,9 @@ function processParagraph(paragraph, imagesMap, options) {
         const image = imagesMap.get(objectId);
         if (image) {
           // Use the URL instead of base64 for cleaner markdown
-          text += `![Image](${image.url})`;
+          // Use image title if available for better alt text
+          const altText = image.title || 'Image';
+          text += `![${altText}](${image.url})`;
         }
       }
     }
@@ -125,7 +141,11 @@ function processParagraph(paragraph, imagesMap, options) {
   // Handle list items
   if (isListItem) {
     const indent = '  '.repeat(listLevel);
-    prefix = `${indent}- `;
+    if (listType === 'ordered') {
+      prefix = `${indent}1. `;
+    } else {
+      prefix = `${indent}- `;
+    }
     suffix = '\n';
   }
   // Handle headings
@@ -183,17 +203,40 @@ function processTextRun(textRun) {
 
   // Handle links
   if (style.link && style.link.url) {
-    // Don't wrap if the text is already the URL
-    if (text.trim() !== style.link.url) {
-      text = `[${text.trim()}](${style.link.url})`;
-    } else {
-      text = style.link.url;
+    // Validate URL to prevent malformed or malicious links
+    const url = style.link.url;
+    const isValidUrl = /^(https?:\/\/|mailto:|tel:)/i.test(url);
+
+    if (isValidUrl) {
+      // Don't wrap if the text is already the URL
+      if (text.trim() !== url) {
+        text = `[${text.trim()}](${url})`;
+      } else {
+        text = url;
+      }
     }
+    // If invalid URL, just keep the text without making it a link
   }
 
-  // Handle code
-  if (style.weightedFontFamily?.fontFamily === 'Consolas' ||
-      style.weightedFontFamily?.fontFamily === 'Courier New') {
+  // Handle code - check for common monospace fonts
+  const monospaceFonts = [
+    'Consolas',
+    'Courier New',
+    'Courier',
+    'Monaco',
+    'Menlo',
+    'Source Code Pro',
+    'Roboto Mono',
+    'Ubuntu Mono',
+    'Fira Mono',
+    'Fira Code',
+    'Inconsolata',
+    'SF Mono',
+    'Lucida Console'
+  ];
+
+  const fontFamily = style.weightedFontFamily?.fontFamily;
+  if (fontFamily && monospaceFonts.includes(fontFamily)) {
     text = `\`${text}\``;
   }
 
@@ -203,7 +246,7 @@ function processTextRun(textRun) {
 /**
  * Process a table element
  */
-function processTable(table, imagesMap, options) {
+function processTable(table, imagesMap, doc, options) {
   let markdown = '\n';
 
   if (!table.tableRows || table.tableRows.length === 0) {
@@ -222,7 +265,7 @@ function processTable(table, imagesMap, options) {
     for (const cell of cells) {
       let cellText = '';
       if (cell.content) {
-        cellText = processContent(cell.content, imagesMap, options).trim();
+        cellText = processContent(cell.content, imagesMap, doc, options).trim();
         // Remove extra newlines from cell content
         cellText = cellText.replace(/\n+/g, ' ');
       }
@@ -289,18 +332,18 @@ function formatCommentsAsBlockquotes(comments) {
 
     markdown += `**${status}**\n\n`;
 
-    // Show quoted text if available
+    // Show quoted text if available (escape markdown to prevent formatting issues)
     if (comment.quotedText) {
-      markdown += `> Re: "${comment.quotedText}"\n\n`;
+      markdown += `> Re: "${escapeMarkdown(comment.quotedText)}"\n\n`;
     }
 
-    // Main comment
-    markdown += `**${comment.author}**: ${comment.content}\n\n`;
+    // Main comment (escape content to prevent markdown injection)
+    markdown += `**${escapeMarkdown(comment.author)}**: ${escapeMarkdown(comment.content)}\n\n`;
 
     // Replies
     if (comment.replies && comment.replies.length > 0) {
       for (const reply of comment.replies) {
-        markdown += `  → **${reply.author}**: ${reply.content}\n\n`;
+        markdown += `  → **${escapeMarkdown(reply.author)}**: ${escapeMarkdown(reply.content)}\n\n`;
       }
     }
 
@@ -321,6 +364,30 @@ function escapeXml(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+/**
+ * Escape markdown special characters to prevent unintended formatting
+ */
+function escapeMarkdown(text) {
+  if (!text) return '';
+  return text
+    .replace(/\\/g, '\\\\')   // Backslash
+    .replace(/\*/g, '\\*')    // Asterisk
+    .replace(/_/g, '\\_')     // Underscore
+    .replace(/\[/g, '\\[')    // Square brackets
+    .replace(/\]/g, '\\]')
+    .replace(/\(/g, '\\(')    // Parentheses
+    .replace(/\)/g, '\\)')
+    .replace(/~/g, '\\~')     // Tilde
+    .replace(/`/g, '\\`')     // Backtick
+    .replace(/>/g, '\\>')     // Greater than (blockquote)
+    .replace(/#/g, '\\#')     // Hash (headers)
+    .replace(/\+/g, '\\+')    // Plus
+    .replace(/-/g, '\\-')     // Dash
+    .replace(/\./g, '\\.')    // Period
+    .replace(/!/g, '\\!')     // Exclamation
+    .replace(/\|/g, '\\|');   // Pipe
 }
 
 // Make convertToMarkdown available globally for background.js

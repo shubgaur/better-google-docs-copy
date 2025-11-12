@@ -191,29 +191,19 @@ function injectCopyButton(toolbar) {
   // Add note about selection
   const selectionNote = document.createElement('div');
   selectionNote.style.cssText = 'padding: 8px 12px; font-size: 11px; color: #666; border-top: 1px solid #e0e0e0; font-style: italic;';
-  selectionNote.textContent = 'Tip: Copy text first (CMD+C), then click here to copy only your selection.';
+  selectionNote.textContent = 'Tip: Select text in the document, then click here to copy only your selection.';
   dropdown.appendChild(selectionNote);
 
   // Toggle dropdown on button click
   mainButton.addEventListener('click', async (e) => {
     e.stopPropagation();
 
-    // Read whatever the user last copied (Ctrl+C) from clipboard
-    try {
-      const clipboardText = await navigator.clipboard.readText();
+    // Capture current selection using window.getSelection()
+    const selectionInfo = getSelectionInfo();
 
-      // Check if clipboard has substantial text (likely a selection)
-      // Short clipboard = likely not a document selection
-      if (clipboardText && clipboardText.trim().length > MIN_CLIPBOARD_LENGTH) {
-        currentSelection = {
-          text: clipboardText,
-          ranges: [],
-          rangeCount: 1
-        };
-      } else {
-        currentSelection = null;
-      }
-    } catch (error) {
+    if (selectionInfo && selectionInfo.text.trim().length >= MIN_CLIPBOARD_LENGTH) {
+      currentSelection = selectionInfo;
+    } else {
       currentSelection = null;
     }
 
@@ -335,7 +325,14 @@ async function downloadDocument(mode) {
     if (response.success) {
       // Get document title from URL or use default
       const docTitle = document.title.replace(' - Google Docs', '') || 'document';
-      const filename = `${docTitle.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.md`;
+      // Sanitize filename: keep alphanumeric, spaces, hyphens, underscores, apostrophes, and parentheses
+      // Replace invalid filename characters and collapse multiple spaces/dashes
+      const filename = `${docTitle
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '') // Remove invalid filename characters
+        .replace(/\s+/g, ' ') // Collapse multiple spaces
+        .replace(/\.+$/g, '') // Remove trailing dots
+        .trim()
+        .substring(0, 100) || 'document'}.md`; // Limit length
 
       // Create blob and download
       const blob = new Blob([response.markdown], { type: 'text/markdown' });
