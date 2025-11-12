@@ -165,12 +165,96 @@
       font-family: 'Courier New', monospace;
       font-size: 12px;
     }
+
+    .auth-btn {
+      background: #1a73e8;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-right: 12px;
+    }
+
+    .auth-btn:hover {
+      background: #1557b0;
+      transform: translateY(-1px);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+
+    .auth-btn:active {
+      transform: translateY(0);
+    }
+
+    .auth-btn.secondary {
+      background: #f1f3f4;
+      color: #5f6368;
+    }
+
+    .auth-btn.secondary:hover {
+      background: #e8eaed;
+    }
+
+    .auth-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      margin-top: 12px;
+    }
+
+    .auth-status.authenticated {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .auth-status.not-authenticated {
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    .auth-status::before {
+      content: '●';
+      font-size: 18px;
+    }
+
+    .auth-status.authenticated::before {
+      color: #28a745;
+    }
+
+    .auth-status.not-authenticated::before {
+      color: #ffc107;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>⚙️ Extension Settings</h1>
     <p class="subtitle">Configure your Google Docs Copy extension</p>
+
+    <!-- Authentication Section -->
+    <div class="section">
+      <h2>Authentication</h2>
+
+      <div class="setting-group">
+        <label class="setting-label">Google Account Access</label>
+        <span class="setting-description">Authenticate to access your Google Docs. Your credentials are managed securely by Chrome.</span>
+
+        <div>
+          <button class="auth-btn" id="authenticateBtn">Authenticate</button>
+          <button class="auth-btn secondary" id="signOutBtn">Sign Out</button>
+        </div>
+
+        <div class="auth-status not-authenticated" id="authStatus">
+          Checking authentication status...
+        </div>
+      </div>
+    </div>
 
     <!-- Markdown Format Section -->
     <div class="section">
@@ -190,8 +274,7 @@
         <span class="setting-description">How comments should be displayed</span>
         <select id="commentFormat">
           <option value="blockquote">Blockquote Style (> Comment)</option>
-          <option value="section">Separate Section at End</option>
-          <option value="inline">Inline Annotations</option>
+          <option value="xml">XML Tags (&lt;comment&gt; sections)</option>
         </select>
       </div>
 
@@ -204,16 +287,6 @@
     <!-- Performance Section -->
     <div class="section">
       <h2>Performance</h2>
-
-      <div class="setting-group">
-        <label class="setting-label">Image Quality</label>
-        <span class="setting-description">Use lower quality for faster copying with large images</span>
-        <select id="imageQuality">
-          <option value="original">Original Quality (Slower)</option>
-          <option value="high">High Quality (Recommended)</option>
-          <option value="medium">Medium Quality (Faster)</option>
-        </select>
-      </div>
 
       <div class="setting-group checkbox-group">
         <input type="checkbox" id="showProgress">

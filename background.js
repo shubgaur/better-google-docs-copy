@@ -3,17 +3,57 @@
 // Import markdown converter
 importScripts('markdown-converter.js');
 
-// Constants for selection filtering
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+// Selection Detection
 const MIN_CLIPBOARD_LENGTH = 20; // Minimum clipboard text length to consider as selection
 const FUZZY_MATCH_CHUNK_SIZE = 100; // Characters to use for fuzzy matching fallback
-const TOKEN_EXPIRY_BUFFER = 5 * 60 * 1000; // 5 minutes buffer before token expiry
 
-// Rate limiting
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 10; // Max 10 requests per minute
+// Authentication
+const OAUTH_TIMEOUT_MS = 120000; // 2 minutes timeout for OAuth flow
+
+// Rate Limiting
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute time window
+const MAX_REQUESTS_PER_WINDOW = 10; // Max requests per time window
+
+// Caching
+const CACHE_TTL_MS = 30 * 1000; // 30 seconds (matches service worker lifetime)
+
+// Retry Logic
+const MAX_RETRY_ATTEMPTS = 3; // Maximum retry attempts for failed requests
+const BASE_RETRY_DELAY_MS = 1000; // Base delay for exponential backoff (1 second)
+
+// Image Processing
+const MAX_IMAGE_WARNING_THRESHOLD = 10; // Warn if more than this many images
+const IMAGE_CONTEXT_MAX_LENGTH = 30; // Max characters for image context text
+const IMAGE_FILENAME_MAX_LENGTH = 50; // Max length for sanitized title in filenames
+
+// Data structures
 const requestTimestamps = [];
+const pendingRequests = new Map();
 
-// Message handler for content script requests
+/**
+ * Send progress update to content script
+ */
+async function sendProgressUpdate(percentage, message) {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs[0] && tabs[0].url && tabs[0].url.includes('docs.google.com/document')) {
+      await chrome.tabs.sendMessage(tabs[0].id, {
+        action: 'updateProgress',
+        percentage: Math.min(100, Math.max(0, percentage)),
+        message: message
+      });
+    }
+  } catch (error) {
+    // Silently fail - progress updates are non-critical
+    console.debug('Failed to send progress update:', error);
+  }
+}
+
+// Message handler for content script and settings page requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'copyDocument') {
     // Handle async operation without blocking message channel
@@ -34,6 +74,44 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       });
     return true; // Keep message channel open for async response
+  } else if (request.action === 'authenticate') {
+    // Manual authentication from settings page
+    getAuthToken(true)
+      .then(token => {
+        sendResponse({ success: true, authenticated: true });
+      })
+      .catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  } else if (request.action === 'signOut') {
+    // Sign out - clear cached token
+    clearAuthToken()
+      .then(() => {
+        sendResponse({ success: true });
+      })
+      .catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  } else if (request.action === 'checkAuth') {
+    // Check if user is authenticated (non-interactive)
+    chrome.identity.getAuthToken({ interactive: false }, (token) => {
+      sendResponse({ authenticated: !!token });
+    });
+    return true;
+  }
+});
+
+// Keyboard shortcut handler
+chrome.commands.onCommand.addListener((command) => {
+  if (command === 'trigger-copy') {
+    // Send message to active tab to trigger the copy menu
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0] && tabs[0].url && tabs[0].url.includes('docs.google.com/document')) {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'triggerCopyMenu' });
+      }
+    });
   }
 });
 
@@ -46,7 +124,6 @@ async function getUserSettings() {
       headingStyle: 'atx',
       commentFormat: 'xml',
       includeResolvedComments: true,
-      imageQuality: 'high',
       showProgress: true
     }, (settings) => {
       resolve(settings);
@@ -61,7 +138,7 @@ function checkRateLimit() {
   const now = Date.now();
 
   // Remove timestamps outside the window
-  while (requestTimestamps.length > 0 && requestTimestamps[0] < now - RATE_LIMIT_WINDOW) {
+  while (requestTimestamps.length > 0 && requestTimestamps[0] < now - RATE_LIMIT_WINDOW_MS) {
     requestTimestamps.shift();
   }
 
@@ -79,33 +156,53 @@ function checkRateLimit() {
  * Main copy handler - orchestrates the entire copy process
  */
 async function handleCopyDocument(documentId, mode, selectionInfo = null, forceRefresh = false) {
-  try {
-    // Step 0: Check rate limit
-    if (!checkRateLimit()) {
-      throw new Error('Rate limit exceeded. Please wait a moment before trying again.');
-    }
+  // Check if there's already a pending request for this document
+  const requestKey = `${documentId}-${mode}-${JSON.stringify(selectionInfo)}`;
 
-    // If forceRefresh is true, clear caches for this document to get fresh data
-    if (forceRefresh) {
-      console.log(`Force refresh requested for document ${documentId} - clearing caches`);
-      commentCache.delete(documentId);
-      documentCache.delete(documentId);
-    }
+  if (pendingRequests.has(requestKey)) {
+    console.log(`Reusing pending request for ${documentId}`);
+    return pendingRequests.get(requestKey);
+  }
 
-    // Step 1: Get OAuth token
+  // Create the promise and store it for deduplication
+  const requestPromise = (async () => {
+    try {
+      // Step 0: Check if online
+      if (!navigator.onLine) {
+        throw new Error('You are offline. Please check your internet connection and try again.');
+      }
+
+      // Step 1: Check rate limit
+      if (!checkRateLimit()) {
+        throw new Error('Rate limit exceeded. Please wait a moment before trying again.');
+      }
+
+      // If forceRefresh is true, clear caches for this document to get fresh data
+      if (forceRefresh) {
+        console.log(`Force refresh requested for document ${documentId} - clearing caches`);
+        commentCache.delete(documentId);
+        documentCache.delete(documentId);
+      }
+
+    // Step 2: Get OAuth token
+    await sendProgressUpdate(5, 'Authenticating...');
     const token = await getAuthToken();
+    await sendProgressUpdate(10, 'Authenticated');
 
     // Step 2: Get user settings
     const settings = await getUserSettings();
 
     // Step 3: Fetch document content from Docs API
+    await sendProgressUpdate(15, 'Fetching document...');
     let doc = await getDocumentContent(documentId, token);
+    await sendProgressUpdate(30, 'Document fetched');
 
     // Step 4: Determine what to fetch based on mode
     const options = {
       includeComments: mode === 'doc-and-comments' || mode === 'doc-comments-images' || mode === 'doc-comments-images-download',
       includeImages: mode === 'doc-comments-images' || mode === 'doc-comments-images-download',
       downloadImages: mode === 'doc-comments-images-download',
+      plainTextOnly: mode === 'plain-text',
       // Add settings
       headingStyle: settings.headingStyle || 'atx',
       commentFormat: settings.commentFormat || 'xml',
@@ -115,10 +212,19 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
 
     // Step 4: Filter document by selection if provided
     if (selectionInfo && selectionInfo.text) {
+      await sendProgressUpdate(35, 'Filtering selection...');
       doc = filterDocumentBySelection(doc, selectionInfo);
+      await sendProgressUpdate(40, 'Selection filtered');
     }
 
     // Step 5 & 6: Fetch images and comments in parallel with graceful degradation
+    if (options.includeImages || options.includeComments) {
+      const tasks = [];
+      if (options.includeImages) tasks.push('images');
+      if (options.includeComments) tasks.push('comments');
+      await sendProgressUpdate(45, `Fetching ${tasks.join(' and ')}...`);
+    }
+
     const [imagesResult, commentsResult] = await Promise.allSettled([
       // Fetch images if requested
       options.includeImages
@@ -143,6 +249,8 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
         : Promise.resolve([])
     ]);
 
+    await sendProgressUpdate(70, 'Processing content...');
+
     // Extract results with graceful degradation
     const images = imagesResult.status === 'fulfilled' ? imagesResult.value : [];
     const comments = commentsResult.status === 'fulfilled' ? commentsResult.value : [];
@@ -158,141 +266,178 @@ async function handleCopyDocument(documentId, mode, selectionInfo = null, forceR
       warnings.push('Failed to fetch comments');
     }
 
+    // Warn if downloading many images
+    if (options.downloadImages && images.length > MAX_IMAGE_WARNING_THRESHOLD) {
+      warnings.push(`${images.length} images - this may take a while`);
+      console.warn(`Downloading ${images.length} images - this may take some time`);
+    }
+
     // Step 7: Convert to markdown (will be handled by markdown-converter.js)
+    await sendProgressUpdate(80, 'Converting to markdown...');
     const markdown = await convertToMarkdown(doc, images, comments, options);
+    await sendProgressUpdate(95, 'Finalizing...');
 
-    return {
-      success: true,
-      markdown: markdown,
-      stats: {
-        characters: markdown.length,
-        images: images.length,
-        comments: comments.length
-      },
-      warnings: warnings.length > 0 ? warnings : undefined
-    };
+      return {
+        success: true,
+        markdown: markdown,
+        stats: {
+          characters: markdown.length,
+          images: images.length,
+          comments: comments.length
+        },
+        warnings: warnings.length > 0 ? warnings : undefined
+      };
 
-  } catch (error) {
-    console.error('Copy failed:', error);
-    throw error;
-  }
+    } catch (error) {
+      console.error('Copy failed:', error);
+      throw error;
+    } finally {
+      // Clean up pending request
+      pendingRequests.delete(requestKey);
+    }
+  })();
+
+  // Store the pending request
+  pendingRequests.set(requestKey, requestPromise);
+
+  return requestPromise;
 }
 
 /**
- * Get OAuth token using chrome.identity.launchWebAuthFlow
- * This method works with Chromium-based browsers (Arc, Brave, Dia, etc.)
+ * Get OAuth token using chrome.identity.getAuthToken (better UX)
+ * Uses Chrome's built-in account picker with full-screen UI
+ * Token persists automatically - Chrome manages caching and refresh
  */
 async function getAuthToken(forceRefresh = false) {
-  // Check if we have a cached token first (unless forcing refresh)
-  if (!forceRefresh) {
-    const cachedToken = await getCachedToken();
-    if (cachedToken) {
-      return cachedToken;
-    }
-  }
-
-  // Get client ID from manifest
-  const manifest = chrome.runtime.getManifest();
-  const clientId = manifest.oauth2.client_id;
-  const scopes = manifest.oauth2.scopes.join(' ');
-  const redirectUri = chrome.identity.getRedirectURL();
-
-  // Build OAuth URL
-  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-  authUrl.searchParams.set('client_id', clientId);
-  authUrl.searchParams.set('response_type', 'token');
-  authUrl.searchParams.set('redirect_uri', redirectUri);
-  authUrl.searchParams.set('scope', scopes);
-
-  // Add prompt=consent if forcing refresh to get new token
-  if (forceRefresh) {
-    authUrl.searchParams.set('prompt', 'consent');
-  }
-
   return new Promise((resolve, reject) => {
-    chrome.identity.launchWebAuthFlow(
-      {
-        url: authUrl.toString(),
-        interactive: true
-      },
-      (responseUrl) => {
+    // Add timeout for OAuth flow (only for interactive prompts)
+    let timeout;
+    if (forceRefresh) {
+      timeout = setTimeout(() => {
+        reject(new Error('Authentication timed out. Please try again or check your internet connection.'));
+      }, OAUTH_TIMEOUT_MS);
+    }
+
+    chrome.identity.getAuthToken(
+      { interactive: true },
+      (token) => {
+        if (timeout) clearTimeout(timeout);
+
         if (chrome.runtime.lastError) {
-          reject(new Error(`OAuth failed: ${chrome.runtime.lastError.message}`));
+          const errorMsg = chrome.runtime.lastError.message;
+
+          // Handle specific error cases with helpful messages
+          if (errorMsg.includes('User did not approve') || errorMsg.includes('canceled')) {
+            reject(new Error('Authentication was cancelled. Please try again and approve access to continue.'));
+            return;
+          }
+
+          if (errorMsg.includes('network') || errorMsg.includes('offline')) {
+            reject(new Error('Network error. Please check your internet connection and try again.'));
+            return;
+          }
+
+          // Generic authentication error with actionable advice
+          reject(new Error(`Authentication failed: ${errorMsg}. Please go to Settings and click "Authenticate" to try again.`));
           return;
         }
 
-        if (!responseUrl) {
-          reject(new Error('No response URL from OAuth flow'));
+        if (!token) {
+          reject(new Error('No access token received. Please go to Settings and click "Authenticate" to authorize this extension.'));
           return;
         }
 
-        // Extract access token from redirect URL
-        const url = new URL(responseUrl);
-        const params = new URLSearchParams(url.hash.substring(1)); // Remove # and parse
-        const accessToken = params.get('access_token');
-        const expiresIn = params.get('expires_in');
-
-        if (!accessToken) {
-          reject(new Error('No access token in OAuth response'));
-          return;
-        }
-
-        // Cache the token with expiration time
-        const expiresAt = Date.now() + (parseInt(expiresIn) || 3600) * 1000;
-        chrome.storage.local.set({
-          access_token: accessToken,
-          token_expires_at: expiresAt
-        });
-
-        resolve(accessToken);
+        resolve(token);
       }
     );
   });
 }
 
 /**
- * Wrapper for fetch that automatically retries with refreshed token on 401
+ * Clear cached auth token (for manual re-authentication)
  */
-async function fetchWithTokenRefresh(url, token, options = {}) {
-  const headers = {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    ...options.headers
-  };
-
-  let response = await fetch(url, { ...options, headers });
-
-  // If 401, refresh token and retry once
-  if (response.status === 401) {
-    const newToken = await getAuthToken(true);
-    headers.Authorization = `Bearer ${newToken}`;
-    response = await fetch(url, { ...options, headers });
-  }
-
-  return response;
+async function clearAuthToken() {
+  return new Promise((resolve) => {
+    chrome.identity.getAuthToken({ interactive: false }, (token) => {
+      if (token) {
+        chrome.identity.removeCachedAuthToken({ token }, () => {
+          // Also revoke the token with Google
+          fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`)
+            .catch(() => {}) // Ignore revocation errors
+            .finally(() => resolve());
+        });
+      } else {
+        resolve();
+      }
+    });
+  });
 }
 
 /**
- * Get cached token if still valid
+ * Retry a function with exponential backoff
  */
-async function getCachedToken() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['access_token', 'token_expires_at'], (result) => {
-      if (result.access_token && result.token_expires_at) {
-        // Check if token is still valid (with buffer before expiry)
-        if (Date.now() < result.token_expires_at - TOKEN_EXPIRY_BUFFER) {
-          resolve(result.access_token);
-          return;
-        }
+async function retryWithBackoff(fn, maxRetries = MAX_RETRY_ATTEMPTS, baseDelay = BASE_RETRY_DELAY_MS) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      // Don't retry on auth errors or client errors (4xx except 429)
+      if (error.status && error.status >= 400 && error.status < 500 && error.status !== 429) {
+        throw error;
       }
-      resolve(null);
-    });
+
+      // If we've exhausted retries, throw
+      if (attempt === maxRetries) {
+        throw error;
+      }
+
+      // Calculate exponential backoff delay: baseDelay * 2^attempt
+      const delay = baseDelay * Math.pow(2, attempt);
+      console.log(`Request failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * Wrapper for fetch that automatically retries with refreshed token on 401 and handles transient errors
+ */
+async function fetchWithTokenRefresh(url, token, options = {}) {
+  return retryWithBackoff(async () => {
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...options.headers
+    };
+
+    let response = await fetch(url, { ...options, headers });
+
+    // If 401, refresh token and retry once
+    if (response.status === 401) {
+      const newToken = await getAuthToken(true);
+      headers.Authorization = `Bearer ${newToken}`;
+      response = await fetch(url, { ...options, headers });
+    }
+
+    // Throw error for non-ok responses to trigger retry logic
+    if (!response.ok && response.status >= 500) {
+      const error = new Error(`HTTP ${response.status}: ${response.statusText}`);
+      error.status = response.status;
+      throw error;
+    }
+
+    return response;
   });
 }
 
 // Document cache: Maps documentId -> { doc, timestamp, revisionId }
 const documentCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Comment cache: Maps documentId -> { comments, timestamp }
 const commentCache = new Map();
@@ -330,7 +475,7 @@ if (typeof globalThis !== 'undefined') {
 async function getDocumentContent(documentId, token) {
   // Check cache first
   const cached = documentCache.get(documentId);
-  if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+  if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
     return cached.doc;
   }
 
@@ -355,6 +500,42 @@ async function getDocumentContent(documentId, token) {
 }
 
 /**
+ * Find context text for an image by searching document paragraphs
+ */
+function findImageContext(doc, objectId) {
+  if (!doc.body || !doc.body.content) {
+    return '';
+  }
+
+  for (const element of doc.body.content) {
+    if (element.paragraph && element.paragraph.elements) {
+      // Check if this paragraph contains the image
+      const hasImage = element.paragraph.elements.some(
+        elem => elem.inlineObjectElement?.inlineObjectId === objectId
+      );
+
+      if (hasImage) {
+        // Extract text from this paragraph
+        let contextText = '';
+        for (const elem of element.paragraph.elements) {
+          if (elem.textRun && elem.textRun.content) {
+            contextText += elem.textRun.content;
+          }
+        }
+        // Clean and limit context text
+        return contextText
+          .replace(/\n+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .substring(0, IMAGE_CONTEXT_MAX_LENGTH);
+      }
+    }
+  }
+
+  return '';
+}
+
+/**
  * Extract and download images from document (with parallel downloads)
  */
 async function extractImages(doc, token, shouldDownload = false, docTitle = 'google-doc') {
@@ -364,11 +545,13 @@ async function extractImages(doc, token, shouldDownload = false, docTitle = 'goo
 
   // Sanitize document title for use in filename
   const sanitizedTitle = docTitle
-    .replace(/[^a-z0-9]/gi, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .toLowerCase()
-    .substring(0, 50); // Limit length
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '') // Remove invalid filename characters
+    .replace(/\s+/g, '-') // Replace spaces with dashes for image filenames
+    .replace(/\.+$/g, '') // Remove trailing dots
+    .replace(/-+/g, '-') // Collapse multiple dashes
+    .replace(/^-|-$/g, '') // Remove leading/trailing dashes
+    .trim()
+    .substring(0, IMAGE_FILENAME_MAX_LENGTH);
 
   // Collect all image info first
   const imageInfos = [];
@@ -387,11 +570,38 @@ async function extractImages(doc, token, shouldDownload = false, docTitle = 'goo
       continue;
     }
 
+    // Validate image URL is from Google domains (security check)
+    const isValidGoogleUrl = /^https:\/\/.*\.google(usercontent|apis)\.com\//i.test(imageUri);
+    if (!isValidGoogleUrl) {
+      console.warn(`Skipping potentially unsafe image URL: ${imageUri}`);
+      continue;
+    }
+
     imageIndex++;
+
+    // Extract title or description for better alt text
+    const title = embeddedObject.title || embeddedObject.description || '';
+
+    // Find context from surrounding text
+    const context = findImageContext(doc, objectId);
+
+    // Build filename with context if available
+    let filename = sanitizedTitle;
+    if (context) {
+      const sanitizedContext = context
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+      filename += `-${sanitizedContext}`;
+    }
+    filename += `-${imageIndex}.png`;
+
     imageInfos.push({
       objectId,
       imageUri,
-      filename: `${sanitizedTitle}-image-${imageIndex}.png`
+      filename,
+      title: title.trim()
     });
   }
 
@@ -400,7 +610,8 @@ async function extractImages(doc, token, shouldDownload = false, docTitle = 'goo
     return imageInfos.map(info => ({
       id: info.objectId,
       url: info.imageUri,
-      mimeType: 'image/png'
+      mimeType: 'image/png',
+      title: info.title || 'Image'
     }));
   }
 
@@ -436,7 +647,8 @@ async function extractImages(doc, token, shouldDownload = false, docTitle = 'goo
       return {
         id: info.objectId,
         url: info.filename,
-        mimeType: blob.type || 'image/png'
+        mimeType: blob.type || 'image/png',
+        title: info.title || 'Image'
       };
     } catch (error) {
       console.error(`Error downloading image ${info.objectId}:`, error);
@@ -467,7 +679,7 @@ async function getComments(documentId, token, documentContent = null) {
 
   // Check cache first
   const cached = commentCache.get(documentId);
-  if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+  if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
     console.log(`✓ Using cached comments for ${documentId} (${cached.comments.length} comments, age: ${Math.round((Date.now() - cached.timestamp) / 1000)}s)`);
     return cached.comments;
   }
@@ -556,11 +768,32 @@ function validateCommentsAgainstDocument(comments, doc, documentId) {
 
     const normalizedQuoted = aggressiveNormalize(comment.quotedText);
 
-    // Check if quoted text appears in document
-    const isValid = normalizedFullText.includes(normalizedQuoted);
+    // Check if quoted text is truncated (Drive API often truncates long quotes)
+    const isTruncated = comment.quotedText.endsWith('...') || normalizedQuoted.length < 10;
 
-    if (!isValid) {
-      console.warn(`[DOC ${documentId}] INVALID COMMENT FILTERED: "${comment.quotedText.substring(0, 50)}..." not found in document. Comment author: ${comment.author}`);
+    let isValid;
+    if (isTruncated) {
+      // For truncated text, check if the beginning appears in the document
+      // Remove trailing "..." if present and use partial match
+      const searchText = normalizedQuoted.replace(/\.+$/, '').trim();
+
+      // Need at least 5 characters for a meaningful partial match
+      if (searchText.length >= 5) {
+        isValid = normalizedFullText.includes(searchText);
+        if (!isValid) {
+          console.warn(`[DOC ${documentId}] TRUNCATED COMMENT FILTERED: "${comment.quotedText.substring(0, 50)}..." not found in document. Comment author: ${comment.author}`);
+        }
+      } else {
+        // Too short to validate reliably, include it anyway
+        console.log(`[DOC ${documentId}] Comment quote too short to validate ("${comment.quotedText}"), including it. Author: ${comment.author}`);
+        isValid = true;
+      }
+    } else {
+      // For non-truncated text, require exact match
+      isValid = normalizedFullText.includes(normalizedQuoted);
+      if (!isValid) {
+        console.warn(`[DOC ${documentId}] INVALID COMMENT FILTERED: "${comment.quotedText.substring(0, 50)}..." not found in document. Comment author: ${comment.author}`);
+      }
     }
 
     return isValid;
@@ -655,12 +888,15 @@ function filterDocumentBySelection(doc, selectionInfo) {
   const selectionEnd = selectionStart + normalizedSelection.length;
 
   // Filter elements that overlap with selection
-  // We need to account for aggressive normalization when mapping back
+  // Pre-normalize all element text once to avoid repeated normalization
+  const normalizedElementTexts = elementMap.map(item => aggressiveNormalize(item.text));
+
   const selectedElements = [];
   let currentPos = 0;
 
-  for (const item of elementMap) {
-    const normalizedItemText = aggressiveNormalize(item.text);
+  for (let i = 0; i < elementMap.length; i++) {
+    const item = elementMap[i];
+    const normalizedItemText = normalizedElementTexts[i];
     const itemStart = currentPos;
     const itemEnd = currentPos + normalizedItemText.length;
 
