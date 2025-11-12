@@ -77,6 +77,8 @@ function convertToMarkdown(doc, images, comments, options) {
 
   // Build comments map by quoted text for inline insertion
   const commentsMap = new Map();
+  const insertedCommentIds = new Set(); // Track which comments were inserted inline
+
   if (options.includeComments && comments && comments.length > 0) {
     // Filter out resolved comments if setting is disabled
     let commentsToProcess = comments;
@@ -121,19 +123,19 @@ function convertToMarkdown(doc, images, comments, options) {
         contentToProcess = contentToProcess.slice(1);
       }
     }
-    markdown += processContent(contentToProcess, imagesMap, doc, options, footnotesMap, commentsMap);
+    markdown += processContent(contentToProcess, imagesMap, doc, options, footnotesMap, commentsMap, insertedCommentIds);
   }
 
   // Append footnotes if any exist
   if (footnotesMap.size > 0) {
     markdown += '\n---\n\n## Footnotes\n\n';
     for (const [footnoteId, footnoteData] of footnotesMap.entries()) {
-      const footnoteContent = processContent(footnoteData.content, imagesMap, doc, options, footnotesMap, new Map());
+      const footnoteContent = processContent(footnoteData.content, imagesMap, doc, options, footnotesMap, new Map(), new Set());
       markdown += `[^${footnoteData.number}]: ${footnoteContent.trim()}\n\n`;
     }
   }
 
-  // Append remaining comments section (for comments without quoted text)
+  // Append remaining comments section (for comments that weren't inserted inline)
   if (options.includeComments && comments.length > 0) {
     // Filter out resolved comments if setting is disabled
     let commentsToInclude = comments;
@@ -141,8 +143,10 @@ function convertToMarkdown(doc, images, comments, options) {
       commentsToInclude = comments.filter(c => !c.resolved);
     }
 
-    // Only include comments that don't have quoted text (weren't inserted inline)
-    const generalComments = commentsToInclude.filter(c => !c.quotedText || c.quotedText.trim().length === 0);
+    // Only include comments that weren't inserted inline
+    const generalComments = commentsToInclude.filter(c => !insertedCommentIds.has(c.id));
+
+    console.log(`${insertedCommentIds.size} comments inserted inline, ${generalComments.length} comments for end section`);
 
     if (generalComments.length > 0) {
       const commentFormat = options.commentFormat || 'xml';
@@ -165,14 +169,14 @@ function convertToMarkdown(doc, images, comments, options) {
  * Process document content recursively
  * Optimized with array join for better performance
  */
-function processContent(content, imagesMap, doc, options, footnotesMap, commentsMap = new Map()) {
+function processContent(content, imagesMap, doc, options, footnotesMap, commentsMap = new Map(), insertedCommentIds = new Set()) {
   const parts = [];
 
   for (const element of content) {
     if (element.paragraph) {
-      parts.push(processParagraph(element.paragraph, imagesMap, doc, options, footnotesMap, commentsMap));
+      parts.push(processParagraph(element.paragraph, imagesMap, doc, options, footnotesMap, commentsMap, insertedCommentIds));
     } else if (element.table) {
-      parts.push(processTable(element.table, imagesMap, doc, options, footnotesMap, commentsMap));
+      parts.push(processTable(element.table, imagesMap, doc, options, footnotesMap, commentsMap, insertedCommentIds));
     } else if (element.tableOfContents) {
       parts.push('> *Table of Contents*\n\n');
     } else if (element.sectionBreak) {
@@ -186,7 +190,7 @@ function processContent(content, imagesMap, doc, options, footnotesMap, comments
 /**
  * Process a paragraph element
  */
-function processParagraph(paragraph, imagesMap, doc, options, footnotesMap, commentsMap = new Map()) {
+function processParagraph(paragraph, imagesMap, doc, options, footnotesMap, commentsMap = new Map(), insertedCommentIds = new Set()) {
   let text = '';
   let isListItem = false;
   let listLevel = 0;
@@ -251,7 +255,7 @@ function processParagraph(paragraph, imagesMap, doc, options, footnotesMap, comm
 
   // Check if this paragraph contains any commented text and insert inline comments
   if (commentsMap.size > 0) {
-    text = insertInlineComments(text, commentsMap, options);
+    text = insertInlineComments(text, commentsMap, options, insertedCommentIds);
   }
 
   // Format based on paragraph style
@@ -352,7 +356,7 @@ function processTextRun(textRun) {
 /**
  * Insert inline comments into text where quoted text matches
  */
-function insertInlineComments(text, commentsMap, options) {
+function insertInlineComments(text, commentsMap, options, insertedCommentIds = new Set()) {
   if (!text || commentsMap.size === 0) {
     return text;
   }
@@ -386,6 +390,9 @@ function insertInlineComments(text, commentsMap, options) {
             }
           }
           commentMarker += ' -->';
+
+          // Mark this comment as inserted
+          insertedCommentIds.add(comment.id);
         }
       } else {
         // Blockquote format
@@ -396,6 +403,9 @@ function insertInlineComments(text, commentsMap, options) {
               commentMarker += `\n> → **${escapeMarkdown(reply.author)}**: ${escapeMarkdown(reply.content)}`;
             }
           }
+
+          // Mark this comment as inserted
+          insertedCommentIds.add(comment.id);
         }
       }
 
@@ -426,7 +436,7 @@ function insertInlineComments(text, commentsMap, options) {
 /**
  * Process a table element
  */
-function processTable(table, imagesMap, doc, options, footnotesMap, commentsMap = new Map()) {
+function processTable(table, imagesMap, doc, options, footnotesMap, commentsMap = new Map(), insertedCommentIds = new Set()) {
   let markdown = '\n';
 
   if (!table.tableRows || table.tableRows.length === 0) {
@@ -445,7 +455,7 @@ function processTable(table, imagesMap, doc, options, footnotesMap, commentsMap 
     for (const cell of cells) {
       let cellText = '';
       if (cell.content) {
-        cellText = processContent(cell.content, imagesMap, doc, options, footnotesMap, commentsMap).trim();
+        cellText = processContent(cell.content, imagesMap, doc, options, footnotesMap, commentsMap, insertedCommentIds).trim();
         // Remove extra newlines from cell content
         cellText = cellText.replace(/\n+/g, ' ');
       }
