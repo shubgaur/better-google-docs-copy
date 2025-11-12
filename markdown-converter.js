@@ -372,46 +372,20 @@ function insertInlineComments(text, commentsMap, options, insertedCommentIds = n
 
   // Try to find matching comments for this text
   for (const [quotedText, commentsList] of commentsMap.entries()) {
-    const normalizedQuoted = normalizeForMatching(quotedText);
+    // Strip trailing "..." from truncated Drive API responses before matching
+    const cleanedQuotedText = quotedText.replace(/\.\.\.+$/, '').trim();
+    const normalizedQuoted = normalizeForMatching(cleanedQuotedText);
 
     // Check if this paragraph contains the quoted text
     if (normalizedText.includes(normalizedQuoted)) {
       console.log(`Found match for quoted text: "${quotedText.substring(0, 50)}..." in paragraph`);
 
-      // Format all comments for this quoted text
-      let commentMarker = '';
-
-      if (commentFormat === 'xml') {
-        for (const comment of commentsList) {
-          commentMarker += `\n<!-- Comment by ${escapeXml(comment.author)}: ${escapeXml(comment.content)}`;
-          if (comment.replies && comment.replies.length > 0) {
-            for (const reply of comment.replies) {
-              commentMarker += `\n  Reply by ${escapeXml(reply.author)}: ${escapeXml(reply.content)}`;
-            }
-          }
-          commentMarker += ' -->';
-
-          // Mark this comment as inserted
-          insertedCommentIds.add(comment.id);
-        }
-      } else {
-        // Blockquote format
-        for (const comment of commentsList) {
-          commentMarker += `\n> 💬 **${escapeMarkdown(comment.author)}**: ${escapeMarkdown(comment.content)}`;
-          if (comment.replies && comment.replies.length > 0) {
-            for (const reply of comment.replies) {
-              commentMarker += `\n> → **${escapeMarkdown(reply.author)}**: ${escapeMarkdown(reply.content)}`;
-            }
-          }
-
-          // Mark this comment as inserted
-          insertedCommentIds.add(comment.id);
-        }
-      }
-
       // Try to find the quoted text position in the original text (case-insensitive, flexible whitespace)
+      // Strip trailing "..." from truncated Drive API responses
+      const cleanedQuotedText = quotedText.replace(/\.\.\.+$/, '').trim();
+
       // Escape special regex characters but allow flexible whitespace
-      const regexPattern = quotedText
+      const regexPattern = cleanedQuotedText
         .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')  // Escape special chars
         .replace(/\s+/g, '\\s+');  // Allow flexible whitespace
 
@@ -419,13 +393,46 @@ function insertInlineComments(text, commentsMap, options, insertedCommentIds = n
       const match = text.match(quotedTextRegex);
 
       if (match) {
-        console.log(`Inserting comment after "${match[0].substring(0, 30)}..."`);
+        // Found exact position - insert inline comment here
+        console.log(`Inserting comment inline after "${match[0].substring(0, 30)}..." at position ${match.index}`);
+
+        // Format all comments for this quoted text
+        let commentMarker = '';
+
+        if (commentFormat === 'xml') {
+          for (const comment of commentsList) {
+            commentMarker += `\n<!-- Comment by ${escapeXml(comment.author)}: ${escapeXml(comment.content)}`;
+            if (comment.replies && comment.replies.length > 0) {
+              for (const reply of comment.replies) {
+                commentMarker += `\n  Reply by ${escapeXml(reply.author)}: ${escapeXml(reply.content)}`;
+              }
+            }
+            commentMarker += ' -->';
+
+            // Mark this comment as inserted inline
+            insertedCommentIds.add(comment.id);
+          }
+        } else {
+          // Blockquote format
+          for (const comment of commentsList) {
+            commentMarker += `\n> 💬 **${escapeMarkdown(comment.author)}**: ${escapeMarkdown(comment.content)}`;
+            if (comment.replies && comment.replies.length > 0) {
+              for (const reply of comment.replies) {
+                commentMarker += `\n> → **${escapeMarkdown(reply.author)}**: ${escapeMarkdown(reply.content)}`;
+              }
+            }
+
+            // Mark this comment as inserted inline
+            insertedCommentIds.add(comment.id);
+          }
+        }
+
         const insertPosition = match.index + match[0].length;
         text = text.slice(0, insertPosition) + commentMarker + text.slice(insertPosition);
       } else {
-        // Fallback: append at end if exact match not found
-        console.log(`Could not find exact position, appending comment to end of paragraph`);
-        text += commentMarker;
+        // Could not find exact position - don't insert inline, let it appear in end section
+        console.log(`Could not find exact position for "${cleanedQuotedText.substring(0, 30)}...", will appear in comments section at end`);
+        // Do NOT mark as inserted - let it appear in the end-of-document comments section
       }
     }
   }
