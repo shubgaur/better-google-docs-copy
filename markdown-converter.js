@@ -169,6 +169,11 @@ function convertToMarkdown(doc, images, comments, options) {
         console.log('Adding ## Comments blockquote section to output');
         markdown += '\n## Comments\n\n';
         markdown += formatCommentsAsBlockquotes(generalComments);
+      } else if (commentFormat === 'quoted-context') {
+        console.log('Adding <comments> quoted context section to output');
+        markdown += '\n<comments>\n';
+        markdown += formatCommentsWithQuotedContext(generalComments);
+        markdown += '</comments>\n';
       }
     } else {
       console.log('⚠️ No comments to add to end section (all were inserted inline or filtered out)');
@@ -425,7 +430,7 @@ function insertInlineComments(text, commentsMap, options, insertedCommentIds = n
             // Mark this comment as inserted inline
             insertedCommentIds.add(comment.id);
           }
-        } else {
+        } else if (commentFormat === 'blockquote') {
           // Blockquote format
           for (const comment of commentsList) {
             commentMarker += `\n> 💬 **${escapeMarkdown(comment.author)}**: ${escapeMarkdown(comment.content)}`;
@@ -434,6 +439,31 @@ function insertInlineComments(text, commentsMap, options, insertedCommentIds = n
                 commentMarker += `\n> → **${escapeMarkdown(reply.author)}**: ${escapeMarkdown(reply.content)}`;
               }
             }
+
+            // Mark this comment as inserted inline
+            insertedCommentIds.add(comment.id);
+          }
+        } else if (commentFormat === 'quoted-context') {
+          // Quoted context format - show quoted text snippet with author/comment
+          for (const comment of commentsList) {
+            if (comment.quotedText) {
+              const maxQuoteLength = 50;
+              let quotedText = comment.quotedText.trim();
+              if (quotedText.length > maxQuoteLength) {
+                quotedText = quotedText.substring(0, maxQuoteLength) + '...';
+              }
+              commentMarker += `\n<!-- > ${quotedText}`;
+              commentMarker += `\n${comment.author}: "${comment.content}"`;
+            } else {
+              commentMarker += `\n<!-- ${comment.author}: "${comment.content}"`;
+            }
+
+            if (comment.replies && comment.replies.length > 0) {
+              for (const reply of comment.replies) {
+                commentMarker += `\n  ${reply.author}: "${reply.content}"`;
+              }
+            }
+            commentMarker += ' -->';
 
             // Mark this comment as inserted inline
             insertedCommentIds.add(comment.id);
@@ -576,6 +606,46 @@ function formatCommentsAsBlockquotes(comments) {
     }
 
     commentParts.push('---\n\n');
+    parts.push(commentParts.join(''));
+  }
+
+  return parts.join('');
+}
+
+/**
+ * Format comments with quoted context
+ * Shows the quoted text snippet followed by author and comment
+ */
+function formatCommentsWithQuotedContext(comments) {
+  const parts = [];
+
+  for (const comment of comments) {
+    const commentParts = [];
+
+    // Show quoted text if available (truncate if too long)
+    if (comment.quotedText) {
+      const maxQuoteLength = 50;
+      let quotedText = comment.quotedText.trim();
+
+      // Truncate long quotes
+      if (quotedText.length > maxQuoteLength) {
+        quotedText = quotedText.substring(0, maxQuoteLength) + '...';
+      }
+
+      commentParts.push(`> ${quotedText}\n`);
+    }
+
+    // Main comment with author
+    commentParts.push(`${comment.author}: "${comment.content}"\n`);
+
+    // Replies
+    if (comment.replies && comment.replies.length > 0) {
+      for (const reply of comment.replies) {
+        commentParts.push(`  ${reply.author}: "${reply.content}"\n`);
+      }
+    }
+
+    commentParts.push('\n');
     parts.push(commentParts.join(''));
   }
 
