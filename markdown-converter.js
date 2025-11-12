@@ -75,6 +75,27 @@ function convertToMarkdown(doc, images, comments, options) {
     }
   }
 
+  // Build comments map by quoted text for inline insertion
+  const commentsMap = new Map();
+  if (options.includeComments && comments && comments.length > 0) {
+    // Filter out resolved comments if setting is disabled
+    let commentsToProcess = comments;
+    if (!options.includeResolvedComments) {
+      commentsToProcess = comments.filter(c => !c.resolved);
+    }
+
+    // Group comments by their quoted text (normalized for matching)
+    for (const comment of commentsToProcess) {
+      if (comment.quotedText && comment.quotedText.trim().length > 0) {
+        const normalizedQuoted = comment.quotedText.trim().toLowerCase();
+        if (!commentsMap.has(normalizedQuoted)) {
+          commentsMap.set(normalizedQuoted, []);
+        }
+        commentsMap.get(normalizedQuoted).push(comment);
+      }
+    }
+  }
+
   let markdown = '';
 
   // Add document title if available (use doc.title, not body content)
@@ -94,19 +115,19 @@ function convertToMarkdown(doc, images, comments, options) {
         contentToProcess = contentToProcess.slice(1);
       }
     }
-    markdown += processContent(contentToProcess, imagesMap, doc, options, footnotesMap);
+    markdown += processContent(contentToProcess, imagesMap, doc, options, footnotesMap, commentsMap);
   }
 
   // Append footnotes if any exist
   if (footnotesMap.size > 0) {
     markdown += '\n---\n\n## Footnotes\n\n';
     for (const [footnoteId, footnoteData] of footnotesMap.entries()) {
-      const footnoteContent = processContent(footnoteData.content, imagesMap, doc, options, footnotesMap);
+      const footnoteContent = processContent(footnoteData.content, imagesMap, doc, options, footnotesMap, new Map());
       markdown += `[^${footnoteData.number}]: ${footnoteContent.trim()}\n\n`;
     }
   }
 
-  // Append comments section if requested
+  // Append remaining comments section (for comments without quoted text)
   if (options.includeComments && comments.length > 0) {
     // Filter out resolved comments if setting is disabled
     let commentsToInclude = comments;
@@ -114,16 +135,19 @@ function convertToMarkdown(doc, images, comments, options) {
       commentsToInclude = comments.filter(c => !c.resolved);
     }
 
-    if (commentsToInclude.length > 0) {
+    // Only include comments that don't have quoted text (weren't inserted inline)
+    const generalComments = commentsToInclude.filter(c => !c.quotedText || c.quotedText.trim().length === 0);
+
+    if (generalComments.length > 0) {
       const commentFormat = options.commentFormat || 'xml';
 
       if (commentFormat === 'xml') {
         markdown += '\n<comments>\n';
-        markdown += formatComments(commentsToInclude);
+        markdown += formatComments(generalComments);
         markdown += '</comments>\n';
       } else if (commentFormat === 'blockquote') {
         markdown += '\n## Comments\n\n';
-        markdown += formatCommentsAsBlockquotes(commentsToInclude);
+        markdown += formatCommentsAsBlockquotes(generalComments);
       }
     }
   }
@@ -135,14 +159,14 @@ function convertToMarkdown(doc, images, comments, options) {
  * Process document content recursively
  * Optimized with array join for better performance
  */
-function processContent(content, imagesMap, doc, options, footnotesMap) {
+function processContent(content, imagesMap, doc, options, footnotesMap, commentsMap = new Map()) {
   const parts = [];
 
   for (const element of content) {
     if (element.paragraph) {
-      parts.push(processParagraph(element.paragraph, imagesMap, doc, options, footnotesMap));
+      parts.push(processParagraph(element.paragraph, imagesMap, doc, options, footnotesMap, commentsMap));
     } else if (element.table) {
-      parts.push(processTable(element.table, imagesMap, doc, options, footnotesMap));
+      parts.push(processTable(element.table, imagesMap, doc, options, footnotesMap, commentsMap));
     } else if (element.tableOfContents) {
       parts.push('> *Table of Contents*\n\n');
     } else if (element.sectionBreak) {
@@ -156,7 +180,7 @@ function processContent(content, imagesMap, doc, options, footnotesMap) {
 /**
  * Process a paragraph element
  */
-function processParagraph(paragraph, imagesMap, doc, options, footnotesMap) {
+function processParagraph(paragraph, imagesMap, doc, options, footnotesMap, commentsMap = new Map()) {
   let text = '';
   let isListItem = false;
   let listLevel = 0;
@@ -217,6 +241,11 @@ function processParagraph(paragraph, imagesMap, doc, options, footnotesMap) {
   // Skip empty paragraphs (just newlines)
   if (!text.trim()) {
     return '\n';
+  }
+
+  // Check if this paragraph contains any commented text and insert inline comments
+  if (commentsMap.size > 0) {
+    text = insertInlineComments(text, commentsMap, options);
   }
 
   // Format based on paragraph style
@@ -315,9 +344,66 @@ function processTextRun(textRun) {
 }
 
 /**
+ * Insert inline comments into text where quoted text matches
+ */
+function insertInlineComments(text, commentsMap, options) {
+  if (!text || commentsMap.size === 0) {
+    return text;
+  }
+
+  const commentFormat = options.commentFormat || 'xml';
+  const normalizedText = text.trim().toLowerCase();
+
+  // Try to find matching comments for this text
+  for (const [quotedText, commentsList] of commentsMap.entries()) {
+    if (normalizedText.includes(quotedText)) {
+      // Format all comments for this quoted text
+      let commentMarker = '';
+
+      if (commentFormat === 'xml') {
+        for (const comment of commentsList) {
+          commentMarker += `\n<!-- Comment by ${escapeXml(comment.author)}: ${escapeXml(comment.content)}`;
+          if (comment.replies && comment.replies.length > 0) {
+            for (const reply of comment.replies) {
+              commentMarker += `\n  Reply by ${escapeXml(reply.author)}: ${escapeXml(reply.content)}`;
+            }
+          }
+          commentMarker += ' -->';
+        }
+      } else {
+        // Blockquote format
+        for (const comment of commentsList) {
+          commentMarker += `\n> 💬 **${escapeMarkdown(comment.author)}**: ${escapeMarkdown(comment.content)}`;
+          if (comment.replies && comment.replies.length > 0) {
+            for (const reply of comment.replies) {
+              commentMarker += `\n> → **${escapeMarkdown(reply.author)}**: ${escapeMarkdown(reply.content)}`;
+            }
+          }
+        }
+      }
+
+      // Try to insert comment right after the quoted text
+      // Find the actual quoted text position (case-insensitive)
+      const quotedTextRegex = new RegExp(quotedText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const match = text.match(quotedTextRegex);
+
+      if (match) {
+        const insertPosition = match.index + match[0].length;
+        text = text.slice(0, insertPosition) + commentMarker + text.slice(insertPosition);
+      } else {
+        // Fallback: append at end if exact match not found
+        text += commentMarker;
+      }
+    }
+  }
+
+  return text;
+}
+
+/**
  * Process a table element
  */
-function processTable(table, imagesMap, doc, options, footnotesMap) {
+function processTable(table, imagesMap, doc, options, footnotesMap, commentsMap = new Map()) {
   let markdown = '\n';
 
   if (!table.tableRows || table.tableRows.length === 0) {
@@ -336,7 +422,7 @@ function processTable(table, imagesMap, doc, options, footnotesMap) {
     for (const cell of cells) {
       let cellText = '';
       if (cell.content) {
-        cellText = processContent(cell.content, imagesMap, doc, options, footnotesMap).trim();
+        cellText = processContent(cell.content, imagesMap, doc, options, footnotesMap, commentsMap).trim();
         // Remove extra newlines from cell content
         cellText = cellText.replace(/\n+/g, ' ');
       }
