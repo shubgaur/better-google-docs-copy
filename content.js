@@ -485,8 +485,9 @@ function showNotification(message, type = 'info', subtext = '') {
   notification.id = 'gdoc-copy-notification';
   notification.className = `gdoc-copy-notification gdoc-copy-notification-${type}`;
 
-  // Create progress circle for loading state
+  // Create icon based on type
   if (type === 'loading') {
+    // Progress circle for loading state
     const progressContainer = document.createElement('div');
     progressContainer.className = 'gdoc-copy-progress-circle';
 
@@ -520,6 +521,88 @@ function showNotification(message, type = 'info', subtext = '') {
     progressContainer.appendChild(svg);
 
     notification.appendChild(progressContainer);
+  } else if (type === 'success') {
+    // Animated checkmark for success
+    const iconContainer = document.createElement('div');
+    iconContainer.className = 'gdoc-copy-icon-container';
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'gdoc-copy-icon-svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '32');
+    svg.setAttribute('height', '32');
+
+    // Circle background
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', '12');
+    circle.setAttribute('cy', '12');
+    circle.setAttribute('r', '10');
+    circle.setAttribute('fill', 'none');
+    circle.setAttribute('stroke', 'white');
+    circle.setAttribute('stroke-width', '2');
+    circle.setAttribute('class', 'gdoc-copy-success-circle');
+
+    // Checkmark path
+    const checkmark = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    checkmark.setAttribute('d', 'M6 12l4 4 8-8');
+    checkmark.setAttribute('fill', 'none');
+    checkmark.setAttribute('stroke', 'white');
+    checkmark.setAttribute('stroke-width', '2');
+    checkmark.setAttribute('stroke-linecap', 'round');
+    checkmark.setAttribute('stroke-linejoin', 'round');
+    checkmark.setAttribute('class', 'gdoc-copy-checkmark');
+
+    svg.appendChild(circle);
+    svg.appendChild(checkmark);
+    iconContainer.appendChild(svg);
+    notification.appendChild(iconContainer);
+  } else if (type === 'error') {
+    // Animated X for error
+    const iconContainer = document.createElement('div');
+    iconContainer.className = 'gdoc-copy-icon-container';
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'gdoc-copy-icon-svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '32');
+    svg.setAttribute('height', '32');
+
+    // Circle background
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', '12');
+    circle.setAttribute('cy', '12');
+    circle.setAttribute('r', '10');
+    circle.setAttribute('fill', 'none');
+    circle.setAttribute('stroke', 'white');
+    circle.setAttribute('stroke-width', '2');
+    circle.setAttribute('class', 'gdoc-copy-error-circle');
+
+    // X mark
+    const x1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    x1.setAttribute('x1', '8');
+    x1.setAttribute('y1', '8');
+    x1.setAttribute('x2', '16');
+    x1.setAttribute('y2', '16');
+    x1.setAttribute('stroke', 'white');
+    x1.setAttribute('stroke-width', '2');
+    x1.setAttribute('stroke-linecap', 'round');
+    x1.setAttribute('class', 'gdoc-copy-x-mark');
+
+    const x2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    x2.setAttribute('x1', '16');
+    x2.setAttribute('y1', '8');
+    x2.setAttribute('x2', '8');
+    x2.setAttribute('y2', '16');
+    x2.setAttribute('stroke', 'white');
+    x2.setAttribute('stroke-width', '2');
+    x2.setAttribute('stroke-linecap', 'round');
+    x2.setAttribute('class', 'gdoc-copy-x-mark');
+
+    svg.appendChild(circle);
+    svg.appendChild(x1);
+    svg.appendChild(x2);
+    iconContainer.appendChild(svg);
+    notification.appendChild(iconContainer);
   }
 
   // Create message container
