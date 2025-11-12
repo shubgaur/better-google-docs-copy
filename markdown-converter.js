@@ -84,16 +84,22 @@ function convertToMarkdown(doc, images, comments, options) {
       commentsToProcess = comments.filter(c => !c.resolved);
     }
 
+    console.log(`Processing ${commentsToProcess.length} comments for inline insertion`);
+
     // Group comments by their quoted text (normalized for matching)
     for (const comment of commentsToProcess) {
       if (comment.quotedText && comment.quotedText.trim().length > 0) {
-        const normalizedQuoted = comment.quotedText.trim().toLowerCase();
-        if (!commentsMap.has(normalizedQuoted)) {
-          commentsMap.set(normalizedQuoted, []);
+        // Store both the original and normalized text for better matching
+        const quotedText = comment.quotedText.trim();
+        if (!commentsMap.has(quotedText)) {
+          commentsMap.set(quotedText, []);
         }
-        commentsMap.get(normalizedQuoted).push(comment);
+        commentsMap.get(quotedText).push(comment);
+        console.log(`Added comment for quoted text: "${quotedText.substring(0, 50)}..."`);
       }
     }
+
+    console.log(`Built commentsMap with ${commentsMap.size} unique quoted texts`);
   }
 
   let markdown = '';
@@ -352,11 +358,22 @@ function insertInlineComments(text, commentsMap, options) {
   }
 
   const commentFormat = options.commentFormat || 'xml';
-  const normalizedText = text.trim().toLowerCase();
+
+  // Normalize text for matching (remove extra whitespace, lowercase)
+  const normalizeForMatching = (str) => {
+    return str.replace(/\s+/g, ' ').trim().toLowerCase();
+  };
+
+  const normalizedText = normalizeForMatching(text);
 
   // Try to find matching comments for this text
   for (const [quotedText, commentsList] of commentsMap.entries()) {
-    if (normalizedText.includes(quotedText)) {
+    const normalizedQuoted = normalizeForMatching(quotedText);
+
+    // Check if this paragraph contains the quoted text
+    if (normalizedText.includes(normalizedQuoted)) {
+      console.log(`Found match for quoted text: "${quotedText.substring(0, 50)}..." in paragraph`);
+
       // Format all comments for this quoted text
       let commentMarker = '';
 
@@ -382,16 +399,22 @@ function insertInlineComments(text, commentsMap, options) {
         }
       }
 
-      // Try to insert comment right after the quoted text
-      // Find the actual quoted text position (case-insensitive)
-      const quotedTextRegex = new RegExp(quotedText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      // Try to find the quoted text position in the original text (case-insensitive, flexible whitespace)
+      // Escape special regex characters but allow flexible whitespace
+      const regexPattern = quotedText
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')  // Escape special chars
+        .replace(/\s+/g, '\\s+');  // Allow flexible whitespace
+
+      const quotedTextRegex = new RegExp(regexPattern, 'i');
       const match = text.match(quotedTextRegex);
 
       if (match) {
+        console.log(`Inserting comment after "${match[0].substring(0, 30)}..."`);
         const insertPosition = match.index + match[0].length;
         text = text.slice(0, insertPosition) + commentMarker + text.slice(insertPosition);
       } else {
         // Fallback: append at end if exact match not found
+        console.log(`Could not find exact position, appending comment to end of paragraph`);
         text += commentMarker;
       }
     }
