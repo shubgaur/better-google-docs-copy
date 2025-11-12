@@ -36,7 +36,7 @@
   "options_page": "settings/settings.html",
 
   "oauth2": {
-    "client_id": "1088951511892-bkeuqah00omj2us3j8khh46r78j219t3.apps.googleusercontent.com",
+    "client_id": "1088951511892-jj2chlue54ke7t6e3b5cprvc5o629qgc.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/documents.readonly",
       "https://www.googleapis.com/auth/drive.readonly"
