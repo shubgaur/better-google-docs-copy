@@ -59,7 +59,7 @@ You want to share a Google Doc with an LLM, so you copy it as markdown. But then
 Right-click extension icon → **Options** to customize:
 
 - **Heading Style**: ATX (`# Heading`) or Setext (underlined)
-- **Comment Format**: XML or Blockquote style
+- **Comment Format**: XML tags, Blockquote style, or Quoted Context (shows comments at end with text snippets)
 - **Include Resolved Comments**: Toggle resolved comments on/off
 
 ---
