@@ -4,16 +4,16 @@ This guide explains how to configure OAuth for your Chrome extension when publis
 
 ## Overview
 
-**Important: As of 2025, Google has deprecated the "Chrome app" OAuth client type.** This extension now uses `chrome.identity.launchWebAuthFlow()` with a **Web Application** OAuth client, which is the current working approach.
+**Important: As of 2025, Google has deprecated the "Chrome app" OAuth client type AND is blocking `chromiumapp.org` redirect URIs.** This extension now uses `chrome.identity.launchWebAuthFlow()` with a **Web Application** OAuth client using the standard loopback redirect URI `http://127.0.0.1`.
 
 ## The Problem
 
 When you publish an extension to the Chrome Web Store, it gets assigned a unique extension ID (e.g., `faciokbjemdddkjokcajndenapikgcml`). For OAuth to work correctly, your Google Cloud Console OAuth client must be configured correctly.
 
 If you see authentication errors like **"Error 400: invalid_request - Custom URI scheme is not supported on Chrome apps"**, it means:
-1. Your OAuth client is using the deprecated "Chrome app" type
+1. Google is blocking the deprecated `chromiumapp.org` custom URI scheme
 2. You need to create a new "Web application" OAuth client
-3. You need to configure the redirect URI
+3. You need to configure the redirect URI as `http://127.0.0.1`
 
 ## Step-by-Step Setup
 
@@ -47,10 +47,10 @@ You can also find it:
 
 7. **Authorized redirect URIs**: Click "ADD URI" and enter:
    ```
-   https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/
+   http://127.0.0.1
    ```
 
-   This is the standard redirect URI format for Chrome extensions: `https://<extension-id>.chromiumapp.org/`
+   This is the standard loopback redirect URI for installed/native applications. Google now blocks the deprecated `chromiumapp.org` custom URI scheme.
 
 8. Click **"Create"**
 
@@ -99,9 +99,8 @@ To test if OAuth is working:
 6. Try copying a document
 
 If you see authentication errors, double-check:
-- ✅ Extension ID matches exactly in the redirect URI (no typos)
 - ✅ OAuth client type is "Web application" (NOT "Chrome app")
-- ✅ Redirect URI is configured: `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/`
+- ✅ Redirect URI is configured: `http://127.0.0.1`
 - ✅ Google Docs API and Drive API are enabled
 - ✅ Client ID in manifest.json is correct
 
@@ -117,17 +116,18 @@ For testing during development:
 2. Use that client ID when testing locally
 3. Switch to the production client ID before publishing
 
-## Why Web Application OAuth Client?
+## Why Web Application OAuth Client with Loopback URI?
 
-As of 2025, Google has deprecated the "Chrome app" OAuth client type, which causes the error:
+As of 2025, Google has deprecated the "Chrome app" OAuth client type AND is blocking `chromiumapp.org` custom URI schemes, which causes the error:
 ```
 Error 400: invalid_request - Custom URI scheme is not supported on Chrome apps
 ```
 
-The solution is to use a **Web Application** OAuth client with `chrome.identity.launchWebAuthFlow()`:
+The solution is to use a **Web Application** OAuth client with `chrome.identity.launchWebAuthFlow()` using the standard loopback redirect URI:
 
 - ✅ **Works in 2025** - Not deprecated like Chrome App OAuth clients
-- ✅ **Standard redirect URI** - Uses `https://<extension-id>.chromiumapp.org/`
+- ✅ **Standard redirect URI** - Uses `http://127.0.0.1` (standard for installed/native apps)
+- ✅ **Not blocked by Google** - Loopback URIs are supported and recommended
 - ✅ **Compatible** - Works with all Chrome extensions
 - ⚠️ **Small popup window** - Unfortunately, `launchWebAuthFlow()` doesn't allow controlling window size (this is a Chrome API limitation)
 
@@ -141,20 +141,20 @@ The solution is to use a **Web Application** OAuth client with `chrome.identity.
 ## Troubleshooting
 
 ### "Error 400: invalid_request - Custom URI scheme is not supported on Chrome apps"
-This error means you're using a deprecated "Chrome app" OAuth client. **Solution:**
-1. Delete or don't use the old "Chrome app" OAuth client
+This error means Google is blocking the deprecated `chromiumapp.org` custom URI scheme. **Solution:**
+1. Delete or don't use the old "Chrome app" OAuth client or any client with `chromiumapp.org` redirect URIs
 2. Create a new "Web application" OAuth client as described above
-3. Configure the redirect URI: `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/`
+3. Configure the redirect URI: `http://127.0.0.1`
 4. Update manifest.json with the new client ID
 
 ### "Error 400: redirect_uri_mismatch"
-- Verify the redirect URI in your OAuth client matches: `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/`
-- Check for typos in the extension ID
+- Verify the redirect URI in your OAuth client matches: `http://127.0.0.1`
 - Make sure you're using "Web application" OAuth client type
+- Ensure there are no typos or extra characters in the redirect URI
 
 ### "OAuth2 not granted or invalid" error
-- Verify extension ID matches exactly in redirect URI
 - Check OAuth client type is "Web application" (NOT "Chrome app")
+- Verify redirect URI is `http://127.0.0.1`
 - Ensure APIs are enabled
 - Make sure Client ID in manifest.json is correct
 

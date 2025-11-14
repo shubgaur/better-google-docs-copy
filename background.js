@@ -326,7 +326,8 @@ async function getAuthToken(forceRefresh = false) {
   const manifest = chrome.runtime.getManifest();
   const clientId = manifest.oauth2.client_id;
   const scopes = manifest.oauth2.scopes.join(' ');
-  const redirectUri = chrome.identity.getRedirectURL();
+  // Use loopback IP address instead of chromiumapp.org (which is deprecated and blocked by Google)
+  const redirectUri = 'http://127.0.0.1';
 
   // Build OAuth URL
   const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
