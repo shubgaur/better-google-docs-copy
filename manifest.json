@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Better Google Docs Copy",
-  "version": "1.2",
+  "version": "1.3",
   "description": "Copy Google Docs content as markdown with images and comments for easy pasting into LLMs",
   "author": "Shub Gaur",
   "homepage_url": "https://github.com/shubgaur/better-google-docs-copy",
@@ -35,7 +35,7 @@
   "options_page": "settings/settings.html",
 
   "oauth2": {
-    "client_id": "1088951511892-6qqih5o8r8mqhabcqnuctpckfu7dbj2k.apps.googleusercontent.com",
+    "client_id": "1088951511892-mu2o72plv6upp7hg67f83kpk2tn6cu0u.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/documents.readonly",
       "https://www.googleapis.com/auth/drive.readonly"

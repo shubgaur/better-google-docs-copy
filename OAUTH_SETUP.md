@@ -4,21 +4,16 @@ This guide explains how to configure OAuth for your Chrome extension when publis
 
 ## Overview
 
-This extension uses `chrome.identity.getAuthToken()`, which is Google's recommended approach for Chrome extensions authenticating with Google APIs. This provides:
-- ✅ **No redirect URI configuration needed** - Chrome handles it automatically
-- ✅ **Better user experience** - Properly sized OAuth window
-- ✅ **Automatic token management** - Chrome manages token caching and refresh
-- ✅ **Simpler setup** - Just configure the OAuth client and enable APIs
+**Important: As of 2025, Google has deprecated the "Chrome app" OAuth client type.** This extension now uses `chrome.identity.launchWebAuthFlow()` with a **Web Application** OAuth client, which is the current working approach.
 
 ## The Problem
 
-When you publish an extension to the Chrome Web Store, it gets assigned a unique extension ID (e.g., `faciokbjemdddkjokcajndenapikgcml`). For OAuth to work correctly, your Google Cloud Console OAuth client must be configured with this exact extension ID.
+When you publish an extension to the Chrome Web Store, it gets assigned a unique extension ID (e.g., `faciokbjemdddkjokcajndenapikgcml`). For OAuth to work correctly, your Google Cloud Console OAuth client must be configured correctly.
 
-If you see authentication errors, it means your OAuth client is either:
-1. Not configured as a Chrome Extension type
-2. Configured with a different extension ID
-3. Not properly set up in Google Cloud Console
-4. Missing required API enablement
+If you see authentication errors like **"Error 400: invalid_request - Custom URI scheme is not supported on Chrome apps"**, it means:
+1. Your OAuth client is using the deprecated "Chrome app" type
+2. You need to create a new "Web application" OAuth client
+3. You need to configure the redirect URI
 
 ## Step-by-Step Setup
 
@@ -44,16 +39,18 @@ You can also find it:
 
 4. Click **"+ CREATE CREDENTIALS"** → **"OAuth client ID"**
 
-5. For **Application type**, select **"Chrome extension"** (or "Chrome app")
+5. For **Application type**, select **"Web application"**
 
-   > **Note:** If you don't see "Chrome extension" as an option, select "Web application" instead. As of 2025, Google Cloud Console may not show the Chrome extension option, but the extension will still work with a Web application OAuth client when using `chrome.identity.getAuthToken()`.
+   > **Critical:** Do NOT use "Chrome app" or "Chrome extension" - these are deprecated and cause the "Custom URI scheme is not supported" error.
 
-6. For **Item ID** (or **Application ID**), enter your extension ID:
+6. **Name**: Give it a descriptive name like "Better Google Docs Copy Extension"
+
+7. **Authorized redirect URIs**: Click "ADD URI" and enter:
    ```
-   faciokbjemdddkjokcajndenapikgcml
+   https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/
    ```
 
-7. **Important:** You do NOT need to configure any redirect URIs. The `chrome.identity.getAuthToken()` API handles this automatically.
+   This is the standard redirect URI format for Chrome extensions: `https://<extension-id>.chromiumapp.org/`
 
 8. Click **"Create"**
 
@@ -97,16 +94,16 @@ To test if OAuth is working:
 1. Install the extension from the Chrome Web Store
 2. Open any Google Doc
 3. Click the "Copy for LLM" button
-4. You should see a **properly-sized** Google account picker in a popup window
+4. You should see the Google account picker in a popup window
 5. Authorize the extension
 6. Try copying a document
 
 If you see authentication errors, double-check:
-- ✅ Extension ID matches exactly (no typos)
-- ✅ OAuth client type is "Chrome extension" or "Web application"
+- ✅ Extension ID matches exactly in the redirect URI (no typos)
+- ✅ OAuth client type is "Web application" (NOT "Chrome app")
+- ✅ Redirect URI is configured: `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/`
 - ✅ Google Docs API and Drive API are enabled
 - ✅ Client ID in manifest.json is correct
-- ✅ You did NOT configure any redirect URIs (Chrome handles this automatically)
 
 ## Developer Mode vs Published Extension
 
@@ -120,16 +117,19 @@ For testing during development:
 2. Use that client ID when testing locally
 3. Switch to the production client ID before publishing
 
-## Why No Redirect URI Configuration?
+## Why Web Application OAuth Client?
 
-This extension uses `chrome.identity.getAuthToken()`, which is the recommended Google API for Chrome extensions. Unlike `chrome.identity.launchWebAuthFlow()` (used for third-party OAuth providers), `getAuthToken()`:
+As of 2025, Google has deprecated the "Chrome app" OAuth client type, which causes the error:
+```
+Error 400: invalid_request - Custom URI scheme is not supported on Chrome apps
+```
 
-- **Automatically handles redirect URIs** - No manual configuration needed
-- **Uses Chrome's built-in OAuth flow** - Better integration with the browser
-- **Provides better window sizing** - No tiny popup windows
-- **Manages token refresh** - Automatic token lifecycle management
+The solution is to use a **Web Application** OAuth client with `chrome.identity.launchWebAuthFlow()`:
 
-The older approach (`launchWebAuthFlow`) required manually configuring redirect URIs like `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/`, but this is no longer necessary with the new implementation.
+- ✅ **Works in 2025** - Not deprecated like Chrome App OAuth clients
+- ✅ **Standard redirect URI** - Uses `https://<extension-id>.chromiumapp.org/`
+- ✅ **Compatible** - Works with all Chrome extensions
+- ⚠️ **Small popup window** - Unfortunately, `launchWebAuthFlow()` doesn't allow controlling window size (this is a Chrome API limitation)
 
 ## Security Notes
 
@@ -140,12 +140,21 @@ The older approach (`launchWebAuthFlow`) required manually configuring redirect 
 
 ## Troubleshooting
 
+### "Error 400: invalid_request - Custom URI scheme is not supported on Chrome apps"
+This error means you're using a deprecated "Chrome app" OAuth client. **Solution:**
+1. Delete or don't use the old "Chrome app" OAuth client
+2. Create a new "Web application" OAuth client as described above
+3. Configure the redirect URI: `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/`
+4. Update manifest.json with the new client ID
+
 ### "Error 400: redirect_uri_mismatch"
-If you see this error, it means you're using an older version of the extension. Update to version 1.2 or later, which uses `chrome.identity.getAuthToken()` and doesn't require redirect URI configuration.
+- Verify the redirect URI in your OAuth client matches: `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/`
+- Check for typos in the extension ID
+- Make sure you're using "Web application" OAuth client type
 
 ### "OAuth2 not granted or invalid" error
-- Verify extension ID matches exactly
-- Check OAuth client type is "Chrome extension" or "Web application"
+- Verify extension ID matches exactly in redirect URI
+- Check OAuth client type is "Web application" (NOT "Chrome app")
 - Ensure APIs are enabled
 - Make sure Client ID in manifest.json is correct
 
@@ -165,7 +174,7 @@ If you see this error, it means you're using an older version of the extension. 
 - Update manifest.json with production client ID before publishing
 
 ### Popup window is too small
-If you're on an older version (before 1.2), update to the latest version which uses `chrome.identity.getAuthToken()` for properly-sized OAuth windows.
+Unfortunately, this is a limitation of the `chrome.identity.launchWebAuthFlow()` API - there's no way to control the window size. This is a known Chrome API limitation and affects all extensions using this approach. The alternative (`chrome.identity.getAuthToken()`) no longer works with deprecated Chrome App OAuth clients.
 
 ## Resources
 
