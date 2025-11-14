@@ -45,14 +45,22 @@ You can also find it:
 
 6. **Name**: Give it a descriptive name like "Better Google Docs Copy Extension"
 
-7. **Authorized redirect URIs**: Click "ADD URI" and enter:
+7. **Authorized redirect URIs**: Click "ADD URI" and add **BOTH** of these:
+
+   **For published extension:**
    ```
-   https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org
+   https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/
    ```
 
-   **IMPORTANT:**
-   - Use your extension's ID (from step 1)
-   - **Do NOT include a trailing slash** - use `https://<extension-id>.chromiumapp.org` not `https://<extension-id>.chromiumapp.org/`
+   **For development/testing (unpacked extension):**
+   ```
+   https://bplpbnchlinhcclefammgmfadofkhgkf.chromiumapp.org/
+   ```
+
+   **CRITICAL NOTES:**
+   - **The trailing slash `/` IS REQUIRED** - `chrome.identity.getRedirectURL()` returns URLs WITH a trailing slash
+   - You need DIFFERENT redirect URIs for published vs unpacked extensions (they have different IDs)
+   - To find your unpacked extension ID: Go to `chrome://extensions/`, enable Developer Mode, and look at your unpacked extension's ID
    - Web Application OAuth clients CAN accept `chromiumapp.org` redirect URIs - you just need to add them explicitly
 
 8. Click **"Create"**
@@ -103,7 +111,9 @@ To test if OAuth is working:
 
 If you see authentication errors, double-check:
 - ✅ OAuth client type is "Web application" (NOT "Chrome app")
-- ✅ Redirect URI is configured: `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org` (no trailing slash!)
+- ✅ Redirect URIs are configured with trailing slashes:
+  - Published: `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/`
+  - Unpacked: `https://bplpbnchlinhcclefammgmfadofkhgkf.chromiumapp.org/`
 - ✅ Extension ID in redirect URI matches your actual extension ID
 - ✅ Google Docs API and Drive API are enabled
 - ✅ Client ID in manifest.json is correct
@@ -148,25 +158,33 @@ The solution is to use a **Web Application** OAuth client with `chrome.identity.
 This error means you're using the deprecated "Chrome app" OAuth client type. **Solution:**
 1. Delete or don't use the old "Chrome app" OAuth client
 2. Create a new "Web application" OAuth client as described above
-3. Configure the redirect URI: `https://<extension-id>.chromiumapp.org` (without trailing slash!)
+3. Configure the redirect URIs with trailing slashes:
+   - `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/` (published)
+   - `https://bplpbnchlinhcclefammgmfadofkhgkf.chromiumapp.org/` (unpacked/dev)
 4. Update manifest.json with the new client ID
 
 ### "Authorization page could not be loaded"
 This error means the redirect URI is not configured correctly. **Solution:**
 1. Make sure you're using "Web application" OAuth client type (NOT "Chrome app")
-2. Add the extension's redirect URI to authorized redirect URIs: `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org`
-3. **Do NOT include a trailing slash** in the redirect URI
-4. Make sure the extension ID in the redirect URI matches your actual extension ID
+2. Add the extension's redirect URI to authorized redirect URIs **WITH trailing slash**
+3. For unpacked/development extensions, find your actual extension ID at `chrome://extensions/` and add that specific redirect URI
+4. Example: If your unpacked extension ID is `bplpbnchlinhcclefammgmfadofkhgkf`, add `https://bplpbnchlinhcclefammgmfadofkhgkf.chromiumapp.org/`
 
 ### "Error 400: redirect_uri_mismatch"
-- Verify the redirect URI in your OAuth client matches: `https://<extension-id>.chromiumapp.org` (no trailing slash!)
-- Check for typos in the extension ID
-- Make sure you're using "Web application" OAuth client type
-- Ensure the redirect URI is added to the authorized redirect URIs list (not just created but actually added!)
+This is the most common error! The redirect URI in Google Cloud Console must match EXACTLY what `chrome.identity.getRedirectURL()` returns.
+
+**Solution:**
+1. **The trailing slash `/` IS REQUIRED** - Chrome always adds it
+2. Verify you've added the redirect URI for your CURRENT extension ID:
+   - If testing unpacked: Get the ID from `chrome://extensions/` and add `https://<that-id>.chromiumapp.org/`
+   - If testing published: Use `https://faciokbjemdddkjokcajndenapikgcml.chromiumapp.org/`
+3. Check for typos in the extension ID
+4. Make sure you're using "Web application" OAuth client type
+5. Ensure the redirect URI is actually added and saved in Google Cloud Console
 
 ### "OAuth2 not granted or invalid" error
 - Check OAuth client type is "Web application" (NOT "Chrome app")
-- Verify redirect URI is `https://<extension-id>.chromiumapp.org` (no trailing slash!)
+- Verify redirect URI is `https://<extension-id>.chromiumapp.org/` (WITH trailing slash!)
 - Ensure APIs are enabled
 - Make sure Client ID in manifest.json is correct
 
