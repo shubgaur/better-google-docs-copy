@@ -77,6 +77,8 @@ Right-click extension icon → **Options** to customize:
 
 **Note**: When installed from Chrome Web Store, you'll stay authenticated. If using unpacked/developer mode, you may need to re-authorize occasionally due to OAuth limitations.
 
+**For Developers**: If you're setting up OAuth for publishing, see [OAUTH_SETUP.md](OAUTH_SETUP.md) for detailed configuration instructions.
+
 ---
 
 ## Privacy & Security

@@ -51,7 +51,6 @@ The Extension requests the following permissions:
 - **`identity`**: To authenticate with your Google account using OAuth
 - **`storage`**: To save your preferences (heading style, comment format, etc.)
 - **`clipboardWrite`**: To copy markdown content to your clipboard
-- **`notifications`**: To show success/error messages (currently unused, may be removed)
 - **`downloads`**: To download markdown files to your computer
 - **`https://docs.google.com/*`**: To inject the "Copy for LLM" button into Google Docs
 - **`https://www.googleapis.com/*`**: To access Google Docs and Drive APIs
