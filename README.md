@@ -30,27 +30,9 @@ You want to share a Google Doc with an LLM, so you copy it as markdown. But then
 ## How to Use
 
 ### Installation
-1. Install from [Chrome Web Store](https://chrome.google.com/webstore/detail/[ITEM-ID]) *(Coming soon)*
+1. Install from [Chrome Web Store]([https://chrome.google.com/webstore/detail/[ITEM-ID]](https://chromewebstore.google.com/detail/better-google-docs-copy/faciokbjemdddkjokcajndenapikgcml?authuser=0&hl=en))
 2. First time: Click "Copy for LLM" button in any Google Doc and authorize access
-3. Done! Start copying documents
-
-### Basic Usage
-1. Open any Google Doc
-2. Click the **"Copy for LLM"** button in the toolbar (top-left)
-3. Choose your mode:
-   - **Doc Only** → Clean markdown text
-   - **Doc + Comments** → Includes comment threads
-   - **Doc + Images** → Includes images as Google URLs or downloads
-   - **Download as .md** → Saves file to Downloads folder
-4. Paste into your AI assistant (Ctrl+V / Cmd+V)
-
-### Copy Selected Text
-1. Select text you want (or press Ctrl+C to copy)
-2. Click "Copy for LLM" button
-3. Extension detects your selection and copies only that part
-4. Images and comments in selection are included too
-
-**Note**: Selection must be at least 20 characters
+3. Done! Start copying documents by selecting a specific mode.
 
 ---
 
@@ -112,7 +94,7 @@ Right-click extension icon → **Options** to customize:
 ## FAQ
 
 **Q: Is this open source?**
-A: Yes! MIT License—free to use, modify, and distribute.
+A: Yeah, do whatever with it
 
 **Q: Does it require internet?**
 A: Yes, needs internet to fetch docs from Google APIs.
@@ -124,37 +106,9 @@ A: Yes, as long as you have access to them in Google Docs.
 A: Google stores comments in Drive, not the Docs API.
 
 **Q: Can I export to other formats?**
-A: Currently only markdown. Other formats planned for future releases.
+A: Currently only markdown. Too lazy to add anything else lol
 
 **Q: Does formatting get preserved?**
 A: Yes! **Bold**, *italic*, ~~strikethrough~~, `code`, links, headings, lists, and tables are all preserved.
 
----
-
-## Troubleshooting
-
-**Button not appearing?**
-- Refresh the page (F5)
-- Check extension is enabled: `chrome://extensions/`
-- Verify you're on a Google Doc (URL has `/document/d/`)
-
-**"Extension context invalidated" error?**
-- Refresh the Google Docs page (F5)
-
-**Comments not showing up?**
-- Button click auto-refreshes comments (no cache)
-- Check Service Worker console: `chrome://extensions/` → Extension details → "Inspect views"
-
-**Images not appearing?**
-- Wait longer (large images take time)
-- Try "Images (URLs)" mode instead of "Download"
-- Check your internet connection
-
-**Selection not working?**
-- Copy text first (Ctrl+C / Cmd+C)
-- Then click "Copy for LLM" button
-- Selection must be at least 20 characters
-
----
-
-**Questions?** Open an issue on [GitHub](https://github.com/shubgaur/better-google-docs-copy)
+Have fun!
