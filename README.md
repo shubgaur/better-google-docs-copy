@@ -1,5 +1,7 @@
 # Google Docs Copy for LLMs 📋
 
+https://www.bettergoogledocscopy.com/
+
 **Copy Google Docs as markdown for Claude, ChatGPT, and other AI assistants—with one click.** Download [here.](https://chromewebstore.google.com/detail/better-google-docs-copy/faciokbjemdddkjokcajndenapikgcml?authuser=0&hl=en)
 
 ---
